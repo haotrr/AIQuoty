@@ -4,7 +4,9 @@
 
 - 无 AIQuoty 云账号、无注册、无遥测
 - 订阅配额 · API 花费 · 本地日志 token **三类指标严格分列**，互不伪造
-- 密钥仅存 **钥匙串**；推荐复用本机已登录的 CLI 凭证
+- 覆盖主流 Agent：Claude Code、Codex、Cursor、Antigravity、Gemini CLI、OpenCode、DeepSeek / DeepSeek Harness、GitHub Copilot、Kimi Code、MiniMax、智谱 GLM / Z.ai、Factory / Droid、Windsurf、Grok / xAI、Cline / Roo Code、OpenRouter 等
+- 支持在菜单栏自定义选择要展示的账号（自动 / 多选 / 仅图标）
+- 密钥仅存 **钥匙串**（合并 vault 存储减少授权弹窗）；推荐复用本机已登录的 CLI 凭证
 - 灵感来自 [AI Stats](https://aistats.coursion.studio/) 与 [CUStats](https://custats.info/)；实现与 UI 为原创
 - 数据路径参考 MIT 许可的 [CodexBar](https://github.com/steipete/CodexBar) 公开文档（见 `THIRD_PARTY.md`）
 
@@ -24,13 +26,16 @@
 # 核心测试
 swift test
 
-# 打包 .app + zip
+# 打包 .app + zip（自动选用本机 Apple Development 签名）
 chmod +x Scripts/build_macos.sh
 Scripts/build_macos.sh
 open dist/AIQuoty.app
+
+# 或直接使用 Xcode 打开
+open AIQuoty.xcodeproj
 ```
 
-首次使用：菜单栏图标 → 设置 → 连接。优先登录 Claude Code / `codex login` / Gemini CLI / `cursor-agent login`；或将 Cookie/Token **在本机**写入钥匙串（勿发到聊天）。
+首次使用：菜单栏图标 → 设置 → 连接。支持自动探测并复用 Claude Code / `codex login` / `cursor-agent login` / `gh auth login` / DeepSeek Harness (`~/.dsh/.credentials.yaml`) / Gemini CLI / OpenCode 等本机登录态；也支持 GitHub / Google 一键登录或在设置中将密钥写入本机钥匙串。
 
 可选：打开「演示模式」查看合成夹具 UI（非真实用量）。
 

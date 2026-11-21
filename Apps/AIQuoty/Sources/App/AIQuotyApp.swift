@@ -109,8 +109,17 @@ final class AppModel: ObservableObject {
     @Published var preferences: AppPreferences = .default
     @Published var searchText: String = ""
     @Published var statusMessage: String = ""
+    @Published var isRefreshing: Bool = false
     @Published var activeSignIn: ActiveSignIn = .idle
     @Published var signInNotice: String = ""
+
+    var preferredColorScheme: ColorScheme? {
+        switch preferences.appearance {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
 
     private var coordinator: RefreshCoordinator?
     private let preferencesStore = JSONPreferencesStore()
@@ -195,8 +204,10 @@ final class AppModel: ObservableObject {
             baseInterval: preferences.refreshIntervalSeconds
         )
         self.coordinator = coordinator
+        let pinnedIDs = Set(preferences.pinnedAccountIDs)
         Task {
             await coordinator.setDemoMode(preferences.demoMode)
+            await coordinator.applyPinnedAccountIDs(pinnedIDs)
             await refresh(force: true)
             startTimer()
         }
@@ -204,6 +215,9 @@ final class AppModel: ObservableObject {
 
     func refresh(force: Bool = false) async {
         guard let coordinator else { return }
+        if isRefreshing { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         statusMessage = "刷新中…"
         detectedAgents = LocalAgentDetector.detect(fileSystem: LocalFileSystem())
         let newState = await coordinator.refreshAll(force: force)
@@ -354,7 +368,9 @@ final class AppModel: ObservableObject {
             state = await coordinator.currentState()
             var prefs = preferences
             if !currently {
-                prefs.pinnedAccountIDs.append(accountID)
+                if !prefs.pinnedAccountIDs.contains(accountID) {
+                    prefs.pinnedAccountIDs.append(accountID)
+                }
             } else {
                 prefs.pinnedAccountIDs.removeAll { $0 == accountID }
             }
@@ -380,12 +396,12 @@ final class AppModel: ObservableObject {
         return [
             ClaudeOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.claudeUsageJSON),
             CodexOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.codexUsageJSON),
-            CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, cursorStateReader: NullCursorStateReader(), demoFixture: DemoFixtures.cursorUsageJSON),
+            CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, cursorStateReader: NullCursorStateReader(), externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.cursorUsageJSON),
             AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.antigravityQuotaJSON),
             GeminiCLIProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.geminiQuotaJSON),
             OpenCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.openCodeUsageJSON),
             DeepSeekProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.deepSeekBalanceJSON),
-            CopilotProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.copilotUserJSON),
+            CopilotProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, externalKeychain: NullExternalKeychainReader(), ghTokenProvider: { nil }, demoFixture: DemoFixtures.copilotUserJSON),
             KimiCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoSubscriptionFixture: DemoFixtures.kimiCodeUsageJSON, demoBalanceFixture: DemoFixtures.moonshotBalanceJSON),
             MiniMaxProvider(credentials: credentials, http: FixtureHTTPClient(), demoFixture: DemoFixtures.miniMaxRemainsJSON),
             ZaiGLMProvider(credentials: credentials, http: FixtureHTTPClient(), demoFixture: DemoFixtures.zaiQuotaJSON),

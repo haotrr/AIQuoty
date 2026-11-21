@@ -34,6 +34,7 @@ public actor RefreshCoordinator {
     private var providers: [any QuotaProvider]
     private var state = State()
     private var backoffSeconds: [String: TimeInterval] = [:]
+    private var pinnedIDs: Set<String> = []
     private let baseInterval: TimeInterval
     private let maxBackoff: TimeInterval
 
@@ -54,11 +55,34 @@ public actor RefreshCoordinator {
     }
 
     public func setPinned(accountID: String, pinned: Bool) {
-        state.snapshots = state.snapshots.map { snap in
+        if pinned {
+            pinnedIDs.insert(accountID)
+        } else {
+            pinnedIDs.remove(accountID)
+        }
+        state.snapshots = Self.sorted(state.snapshots.map { snap in
             guard snap.account.id == accountID else { return snap }
             var copy = snap
             copy.account.pinned = pinned
             return copy
+        })
+    }
+
+    public func applyPinnedAccountIDs(_ ids: Set<String>) {
+        pinnedIDs.formUnion(ids)
+        guard !pinnedIDs.isEmpty else { return }
+        state.snapshots = Self.sorted(state.snapshots.map { snap in
+            guard pinnedIDs.contains(snap.account.id) else { return snap }
+            var copy = snap
+            copy.account.pinned = true
+            return copy
+        })
+    }
+
+    private static func sorted(_ snapshots: [AccountSnapshot]) -> [AccountSnapshot] {
+        snapshots.sorted { lhs, rhs in
+            if lhs.account.pinned != rhs.account.pinned { return lhs.account.pinned && !rhs.account.pinned }
+            return lhs.account.displayName.localizedStandardCompare(rhs.account.displayName) == .orderedAscending
         }
     }
 
@@ -96,34 +120,65 @@ public actor RefreshCoordinator {
         // Preserve previous by account id for stale marking / isolation.
         let previousByID = Dictionary(uniqueKeysWithValues: state.snapshots.map { ($0.account.id, $0) })
 
+        enum ProviderOutcome: Sendable {
+            case success(pid: String, snapshots: [AccountSnapshot])
+            case failure(pid: String, displayName: String, error: ProviderError)
+        }
+
+        var activeProviders: [any QuotaProvider] = []
         for provider in providers {
             let pid = provider.descriptor.id
             if !force, let wait = backoffSeconds[pid], wait > 0,
                let last = state.lastRefreshAt,
                now.timeIntervalSince(last) < wait {
-                // Keep previous snapshots for this provider during backoff.
                 nextSnapshots.append(contentsOf: state.snapshots.filter { $0.account.providerID == pid })
                 errors[pid] = "退避中（\(Int(wait))s）"
                 continue
             }
-            do {
-                let fetched = try await provider.fetch(
-                    request: ProviderFetchRequest(force: force, now: now, demoMode: state.demoMode)
-                )
-                // Account isolation: only replace this provider's rows.
+            activeProviders.append(provider)
+        }
+
+        let demoMode = state.demoMode
+        let outcomes: [ProviderOutcome] = await withTaskGroup(of: ProviderOutcome.self) { group in
+            for provider in activeProviders {
+                let pid = provider.descriptor.id
+                let displayName = provider.descriptor.displayName
+                group.addTask {
+                    do {
+                        let fetched = try await provider.fetch(
+                            request: ProviderFetchRequest(force: force, now: now, demoMode: demoMode)
+                        )
+                        return .success(pid: pid, snapshots: fetched)
+                    } catch {
+                        let providerError = (error as? ProviderError) ?? .network(String(describing: error))
+                        return .failure(pid: pid, displayName: displayName, error: providerError)
+                    }
+                }
+            }
+            var collected: [ProviderOutcome] = []
+            for await item in group {
+                collected.append(item)
+            }
+            return collected
+        }
+
+        for outcome in outcomes {
+            switch outcome {
+            case .success(let pid, let fetched):
                 let merged = fetched.map { fresh -> AccountSnapshot in
+                    var copy = fresh
                     if let old = previousByID[fresh.account.id] {
-                        var copy = fresh
                         copy.account.pinned = old.account.pinned
                         copy.account.group = old.account.group
-                        return copy
                     }
-                    return fresh
+                    if pinnedIDs.contains(fresh.account.id) {
+                        copy.account.pinned = true
+                    }
+                    return copy
                 }
                 nextSnapshots.append(contentsOf: merged)
                 backoffSeconds[pid] = 0
-            } catch {
-                let providerError = (error as? ProviderError) ?? .network(String(describing: error))
+            case .failure(let pid, let displayName, let providerError):
                 let prior = state.snapshots.filter { $0.account.providerID == pid }
                 switch providerError {
                 case .notConfigured:
@@ -136,11 +191,12 @@ public actor RefreshCoordinator {
                     nextSnapshots.append(contentsOf: prior.map { $0.markingRateLimited(retryAfter: delay, at: now) })
                 case .authRequired:
                     errors[pid] = providerError.userMessage
-                    backoffSeconds[pid] = min((backoffSeconds[pid] ?? 30) * 2, maxBackoff)
+                    let prevBackoff = backoffSeconds[pid] ?? 0
+                    backoffSeconds[pid] = min(max(prevBackoff * 2, 30), maxBackoff)
                     if prior.isEmpty {
                         nextSnapshots.append(
                             AccountSnapshot(
-                                account: AccountIdentity(id: "\(pid).missing", providerID: pid, displayName: provider.descriptor.displayName),
+                                account: AccountIdentity(id: "\(pid).missing", providerID: pid, displayName: displayName),
                                 connection: .authRequired,
                                 lastAttemptAt: now,
                                 lastError: providerError.userMessage
@@ -166,10 +222,7 @@ public actor RefreshCoordinator {
         for snap in nextSnapshots {
             unique[snap.account.id] = snap
         }
-        state.snapshots = Array(unique.values).sorted { lhs, rhs in
-            if lhs.account.pinned != rhs.account.pinned { return lhs.account.pinned && !rhs.account.pinned }
-            return lhs.account.displayName.localizedStandardCompare(rhs.account.displayName) == .orderedAscending
-        }
+        state.snapshots = Self.sorted(Array(unique.values))
         state.providerErrors = errors
         state.lastRefreshAt = now
         state.nextAllowedAt = now.addingTimeInterval(baseInterval)

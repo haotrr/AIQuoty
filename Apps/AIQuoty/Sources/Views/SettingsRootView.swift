@@ -33,7 +33,7 @@ struct SettingsRootView: View {
                 providerID: "cursor",
                 title: "Cursor",
                 placeholder: "Cursor Cookie（WorkosCursorSessionToken）",
-                hint: "自动只读 Cursor 桌面端 state.vscdb 的登录态，也支持在此手动覆盖 Cookie。",
+                hint: "自动复用钥匙串「cursor-access-token」/ ~/.cursor/auth.json / 桌面端明文登录态，也支持在此手动覆盖 Cookie。",
                 account: CredentialAccount.cursorSessionCookie,
                 buttonTitle: "保存 Cursor Cookie"
             ),
@@ -197,6 +197,7 @@ struct SettingsRootView: View {
             aboutTab.tabItem { Label("关于", systemImage: "info.circle") }
         }
         .padding(16)
+        .preferredColorScheme(model.preferredColorScheme)
         .onAppear {
             reloadSavedFlags()
             AppWindowActivator.activateWindow(matchingTitle: "设置", identifierHint: "Settings")
@@ -592,8 +593,20 @@ struct DashboardView: View {
                     openSettings()
                     AppWindowActivator.activateWindow(matchingTitle: "设置", identifierHint: "Settings")
                 }
-                Button("刷新") { Task { await model.refresh(force: true) } }
-                    .keyboardShortcut("r", modifiers: [.command])
+                Button {
+                    Task { await model.refresh(force: true) }
+                } label: {
+                    if model.isRefreshing {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.small)
+                            Text("刷新中")
+                        }
+                    } else {
+                        Text("刷新")
+                    }
+                }
+                .disabled(model.isRefreshing)
+                .keyboardShortcut("r", modifiers: [.command])
             }
             .padding()
             Divider()
@@ -646,6 +659,7 @@ struct DashboardView: View {
             .listStyle(.inset)
         }
         .background(Palette.popoverBackground)
+        .preferredColorScheme(model.preferredColorScheme)
         .onAppear {
             AppWindowActivator.activateWindow(matchingTitle: "仪表盘", identifierHint: "dashboard")
         }

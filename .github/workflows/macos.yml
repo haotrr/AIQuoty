@@ -28,7 +28,7 @@ jobs:
 
   macos-app:
     name: Build .app (macOS)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
@@ -39,10 +39,12 @@ jobs:
         run: |
           chmod +x Scripts/build_macos.sh
           Scripts/build_macos.sh
+      - name: Verify Xcode project tests
+        run: xcodebuild -project AIQuoty.xcodeproj -scheme AIQuoty -configuration Debug test -quiet
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AIQuoty-macos14
+          name: AIQuoty-macos
           path: |
             dist/AIQuoty.app
             dist/AIQuoty-macos14.zip

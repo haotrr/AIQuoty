@@ -83,13 +83,20 @@ public struct CodexOAuthProvider: QuotaProvider {
         let windows = CodexUsageParser.quotaWindows(from: parsed, accountID: accountID, capturedAt: now)
         var spend: [MetricValue] = []
         if let balance = parsed.creditsBalance {
+            let numeric = Double(balance.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespaces))
+            let formattedDisplay: String
+            if let numeric {
+                formattedDisplay = String(format: "%.2f credits", numeric)
+            } else {
+                formattedDisplay = balance
+            }
             spend.append(
                 MetricValue(
                     kind: .apiSpend,
                     precision: .reported,
                     unit: .credits,
-                    value: Double(balance.replacingOccurrences(of: "$", with: "")),
-                    display: balance,
+                    value: numeric,
+                    display: formattedDisplay,
                     source: CodexUsageParser.source,
                     capturedAt: now,
                     freshness: .fresh

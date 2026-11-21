@@ -209,4 +209,55 @@ final class RefreshIsolationTests: XCTestCase {
             XCTFail("expected authRequired")
         }
     }
+
+    func testApplyPinnedAccountIDsRestoresAndSortsAcrossRefresh() async {
+        let a = AccountSnapshot(
+            account: AccountIdentity(id: "alpha.1", providerID: "alpha", displayName: "Alpha"),
+            connection: .connected
+        )
+        let z = AccountSnapshot(
+            account: AccountIdentity(id: "zeta.1", providerID: "zeta", displayName: "Zeta"),
+            connection: .connected
+        )
+        let pA = StubProvider(
+            descriptor: ProviderDescriptor(id: "alpha", displayName: "Alpha", implementationStatus: .implemented, authMethods: [], supportedMetricKinds: [.subscriptionQuota], notes: ""),
+            result: .success([a]),
+            accounts: [a.account]
+        )
+        let pZ = StubProvider(
+            descriptor: ProviderDescriptor(id: "zeta", displayName: "Zeta", implementationStatus: .implemented, authMethods: [], supportedMetricKinds: [.subscriptionQuota], notes: ""),
+            result: .success([z]),
+            accounts: [z.account]
+        )
+        let coordinator = RefreshCoordinator(providers: [pA, pZ], baseInterval: 1)
+        await coordinator.applyPinnedAccountIDs(["zeta.1"])
+        let state = await coordinator.refreshAll(force: true)
+        XCTAssertEqual(state.snapshots.map(\.account.id), ["zeta.1", "alpha.1"])
+        XCTAssertTrue(state.snapshots[0].account.pinned)
+        XCTAssertFalse(state.snapshots[1].account.pinned)
+
+        // Unpinning moves Zeta back after Alpha.
+        await coordinator.setPinned(accountID: "zeta.1", pinned: false)
+        let unpinnedState = await coordinator.currentState()
+        XCTAssertEqual(unpinnedState.snapshots.map(\.account.id), ["alpha.1", "zeta.1"])
+    }
+
+    func testCodexCreditsBalanceFormatsToTwoDecimals() async throws {
+        let json = """
+        {
+          "plan_type": "pro",
+          "email": "u@example.com",
+          "credits": { "balance": "209.6901155000" }
+        }
+        """
+        let provider = CodexOAuthProvider(
+            credentials: InMemoryCredentialStore(),
+            http: FixtureHTTPClient(),
+            fileSystem: MemoryFileSystem(),
+            demoFixture: Data(json.utf8)
+        )
+        let snaps = try await provider.fetch(request: ProviderFetchRequest(force: true, now: Date(), demoMode: true))
+        XCTAssertEqual(snaps.count, 1)
+        XCTAssertEqual(snaps[0].spendMetrics.first?.display, "209.69 credits")
+    }
 }

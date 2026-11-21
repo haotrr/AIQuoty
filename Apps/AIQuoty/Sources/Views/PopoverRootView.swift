@@ -75,15 +75,7 @@ struct PopoverRootView: View {
         }
         .frame(width: 360, height: 480)
         .background(Palette.popoverBackground)
-        .preferredColorScheme(colorScheme)
-    }
-
-    private var colorScheme: ColorScheme? {
-        switch model.preferences.appearance {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
+        .preferredColorScheme(model.preferredColorScheme)
     }
 
     private var visibleSnapshots: [AccountSnapshot] {
@@ -172,8 +164,14 @@ struct PopoverRootView: View {
             Button {
                 Task { await model.refresh(force: true) }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                if model.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
+            .disabled(model.isRefreshing)
             .help("立即刷新")
             .keyboardShortcut("r", modifiers: [.command])
             .accessibilityLabel("刷新")
@@ -204,14 +202,19 @@ struct PopoverRootView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text(statusLine)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             Spacer()
             Button("仪表盘") { openDashboardAndActivate() }
+                .controlSize(.small)
             Button("设置") { openSettingsAndActivate() }
+                .controlSize(.small)
+            Button("退出") { NSApp.terminate(nil) }
+                .controlSize(.small)
+                .keyboardShortcut("q", modifiers: [.command])
         }
         .padding(10)
     }
@@ -441,7 +444,7 @@ struct AccountCard: View {
                 Spacer()
                 if let onToggleMenuBar {
                     Button(action: onToggleMenuBar) {
-                        Image(systemName: inMenuBar ? "menubar.rectangle" : "menubar.rectangle")
+                        Image(systemName: "menubar.rectangle")
                             .foregroundStyle(inMenuBar ? Color.accentColor : Color.secondary.opacity(0.6))
                     }
                     .buttonStyle(.plain)
@@ -455,10 +458,12 @@ struct AccountCard: View {
                 .accessibilityLabel(snapshot.account.pinned ? "取消置顶" : "置顶")
             }
 
-            if snapshot.windows.isEmpty && snapshot.spendMetrics.isEmpty && snapshot.localTokenMetrics.isEmpty {
+            let hasMetrics = !snapshot.windows.isEmpty || !snapshot.spendMetrics.isEmpty || !snapshot.localTokenMetrics.isEmpty
+            if !hasMetrics {
                 Text(snapshot.lastError ?? "无可用指标（保持未知）")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(snapshot.lastError != nil ? .orange : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             ForEach(snapshot.windows) { window in
@@ -470,10 +475,11 @@ struct AccountCard: View {
             ForEach(Array(snapshot.localTokenMetrics.enumerated()), id: \.offset) { _, metric in
                 MetricRow(metric: metric, tint: Palette.local)
             }
-            if snapshot.freshnessHint != nil {
-                Text(snapshot.freshnessHint!)
+            if hasMetrics, let hint = snapshot.freshnessHint {
+                Text(hint)
                     .font(.caption2)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(10)
