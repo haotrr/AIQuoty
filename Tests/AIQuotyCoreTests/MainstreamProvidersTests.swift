@@ -386,6 +386,15 @@ final class MainstreamProvidersTests: XCTestCase {
         )
         XCTAssertEqual(multi, "DS ¥110 · AGY 55%")
 
+        // Overflow beyond the menu bar item cap collapses into "+N".
+        var extra1 = ds; extra1.account.id = "deepseek.extra1"
+        var extra2 = ds; extra2.account.id = "deepseek.extra2"
+        let overflow = MenuBarFormatter.summary(
+            snapshots: [agy, ds, extra1, extra2],
+            selectedAccountIDs: ["antigravity.oauth", "deepseek.dsh", "deepseek.extra1", "deepseek.extra2"]
+        )
+        XCTAssertEqual(overflow, "AGY 55% · DS ¥110 · DS ¥110 +1")
+
         // Icon-only mode returns empty text.
         XCTAssertEqual(
             MenuBarFormatter.summary(snapshots: [agy, ds], selectedAccountIDs: ["antigravity.oauth"], iconOnly: true),

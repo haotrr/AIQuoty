@@ -31,8 +31,17 @@ public enum MenuBarFormatter {
         guard !chosen.isEmpty else {
             return demoMode ? "演示" : "AIQuoty"
         }
-        return chosen.map(itemText(for:)).joined(separator: " · ")
+        // Keep the menu bar extra narrow: on notched displays the system hides
+        // extras that overflow. Show at most `maxItems`, then a compact "+N".
+        let limit = max(1, maxItems)
+        let visible = chosen.prefix(limit).map(itemText(for:))
+        let overflow = chosen.count - visible.count
+        let joined = visible.joined(separator: " · ")
+        return overflow > 0 ? "\(joined) +\(overflow)" : joined
     }
+
+    /// Maximum number of accounts rendered as text in the menu bar.
+    public static let maxItems = 3
 
     public static func itemText(for snapshot: AccountSnapshot) -> String {
         let name = shortName(for: snapshot.account)

@@ -2,6 +2,7 @@
 import SwiftUI
 import AIQuotyCore
 import AppKit
+import ServiceManagement
 
 @main
 struct AIQuotyApp: App {
@@ -19,7 +20,6 @@ struct AIQuotyApp: App {
         Settings {
             SettingsRootView()
                 .environmentObject(model)
-                .frame(minWidth: 560, minHeight: 420)
         }
 
         Window("AIQuoty 仪表盘", id: "dashboard") {
@@ -30,54 +30,60 @@ struct AIQuotyApp: App {
     }
 }
 
+/// Window activation for an `LSUIElement` menu bar app.
+///
+/// While a regular window (Settings / Dashboard) is open, the app temporarily becomes a
+/// `.regular` app so the window gets a Dock icon, appears in ⌘Tab and reliably comes to the
+/// front. When the last regular window closes, it returns to `.accessory`.
 @MainActor
 enum AppWindowActivator {
-    /// Brings an LSUIElement / MenuBarExtra app's regular window (Settings / Dashboard)
-    /// reliably to the foreground above other apps, even while the menu bar popover is dismissing.
-    static func activateWindow(matchingTitle titleHint: String? = nil, identifierHint: String? = nil) {
-        bringAppAndWindowToFront(titleHint: titleHint, identifierHint: identifierHint)
-        DispatchQueue.main.async {
-            bringAppAndWindowToFront(titleHint: titleHint, identifierHint: identifierHint)
+    private static var closeObserver: NSObjectProtocol?
+
+    static func activateWindow(identifierHint: String) {
+        installCloseObserverIfNeeded()
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            bringAppAndWindowToFront(titleHint: titleHint, identifierHint: identifierHint)
+        NSApp.activate()
+        // `openWindow` / `openSettings` create the window asynchronously; front it on the next turn.
+        DispatchQueue.main.async {
+            NSApp.activate()
+            let target = regularWindows().first {
+                $0.identifier?.rawValue.localizedCaseInsensitiveContains(identifierHint) == true
+            } ?? regularWindows().first
+            if let target {
+                if target.isMiniaturized { target.deminiaturize(nil) }
+                target.makeKeyAndOrderFront(nil)
+            }
         }
     }
 
-    private static func bringAppAndWindowToFront(titleHint: String?, identifierHint: String?) {
-        NSRunningApplication.current.activate(options: [.activateAllWindows])
-        NSApp.activate(ignoringOtherApps: true)
+    private static func isRegularWindow(_ window: NSWindow) -> Bool {
+        let className = NSStringFromClass(type(of: window))
+        if className.contains("StatusBar") || className.contains("MenuBarExtra") { return false }
+        return window.styleMask.contains(.titled) && window.canBecomeMain
+    }
 
-        let candidates = NSApp.windows.filter { window in
-            let className = NSStringFromClass(type(of: window))
-            if className.contains("StatusBar") || className.contains("MenuBarExtra") {
-                return false
+    private static func regularWindows() -> [NSWindow] {
+        NSApp.windows.filter(isRegularWindow)
+    }
+
+    private static func installCloseObserverIfNeeded() {
+        guard closeObserver == nil else { return }
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let closing = note.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                guard isRegularWindow(closing) else { return }
+                let remaining = regularWindows().filter { $0 !== closing && $0.isVisible }
+                if remaining.isEmpty, NSApp.activationPolicy() == .regular {
+                    NSApp.setActivationPolicy(.accessory)
+                }
             }
-            if window.level == .statusBar || window.level == .popUpMenu {
-                return false
-            }
-            return window.canBecomeKey
         }
-
-        let matched = candidates.first { window in
-            if let titleHint, window.title.localizedCaseInsensitiveContains(titleHint) {
-                return true
-            }
-            if let identifierHint,
-               let rawID = window.identifier?.rawValue,
-               rawID.localizedCaseInsensitiveContains(identifierHint) {
-                return true
-            }
-            return false
-        } ?? candidates.first(where: { $0.isVisible }) ?? candidates.first
-
-        guard let target = matched else { return }
-        if target.isMiniaturized {
-            target.deminiaturize(nil)
-        }
-        target.collectionBehavior.insert(.moveToActiveSpace)
-        target.orderFrontRegardless()
-        target.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -90,8 +96,12 @@ struct MenuBarLabel: View {
             Image(systemName: "gauge.with.dots.needle.33percent")
                 .accessibilityLabel("AIQuoty")
         } else {
-            Label(text, systemImage: "gauge.with.dots.needle.33percent")
-                .accessibilityLabel("AIQuoty \(text)")
+            HStack(spacing: 4) {
+                Image(systemName: "gauge.with.dots.needle.33percent")
+                Text(text).monospacedDigit()
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("AIQuoty \(text)")
         }
     }
 }
@@ -106,12 +116,18 @@ final class AppModel: ObservableObject {
 
     @Published var state: RefreshCoordinator.State = .init()
     @Published var detectedAgents: [DetectedLocalAgent] = []
-    @Published var preferences: AppPreferences = .default
+    /// Settings apply immediately (macOS convention): every change is persisted, and changes that
+    /// affect the provider set (demo mode / local logs) rebuild the coordinator automatically.
+    @Published var preferences: AppPreferences = .default {
+        didSet { preferencesDidChange(from: oldValue) }
+    }
     @Published var searchText: String = ""
     @Published var statusMessage: String = ""
     @Published var isRefreshing: Bool = false
     @Published var activeSignIn: ActiveSignIn = .idle
     @Published var signInNotice: String = ""
+    @Published private(set) var launchAtLogin: Bool = false
+    @Published var launchAtLoginError: String?
 
     var preferredColorScheme: ColorScheme? {
         switch preferences.appearance {
@@ -126,6 +142,8 @@ final class AppModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var signInTask: Task<Void, Never>?
     private var activeLoopbackServer: LoopbackOAuthServer?
+    private var isLoadingPreferences = false
+    private var rebootstrapTask: Task<Void, Never>?
 
     var menuBarSummary: String {
         MenuBarFormatter.summary(
@@ -149,7 +167,6 @@ final class AppModel: ObservableObject {
             prefs.menuBarAccountIDs.append(accountID)
         }
         preferences = prefs
-        try? preferencesStore.save(prefs)
     }
 
     func selectAllMenuBarAccounts() {
@@ -157,7 +174,6 @@ final class AppModel: ObservableObject {
         prefs.menuBarIconOnly = false
         prefs.menuBarAccountIDs = state.snapshots.map(\.account.id)
         preferences = prefs
-        try? preferencesStore.save(prefs)
     }
 
     func resetMenuBarToAuto() {
@@ -165,22 +181,60 @@ final class AppModel: ObservableObject {
         prefs.menuBarIconOnly = false
         prefs.menuBarAccountIDs = []
         preferences = prefs
-        try? preferencesStore.save(prefs)
     }
 
     func setMenuBarIconOnly(_ enabled: Bool) {
-        var prefs = preferences
-        prefs.menuBarIconOnly = enabled
-        preferences = prefs
-        try? preferencesStore.save(prefs)
+        preferences.menuBarIconOnly = enabled
     }
 
     init() {
+        launchAtLogin = SMAppService.mainApp.status == .enabled
         bootstrap()
     }
 
+    // MARK: Preferences
+
+    private func preferencesDidChange(from old: AppPreferences) {
+        guard !isLoadingPreferences, old != preferences else { return }
+        try? preferencesStore.save(preferences)
+
+        let providerSetChanged = old.demoMode != preferences.demoMode
+            || old.enableLocalClaudeLogs != preferences.enableLocalClaudeLogs
+            || old.enableLocalCodexLogs != preferences.enableLocalCodexLogs
+            || old.enableLocalOpenCodeLogs != preferences.enableLocalOpenCodeLogs
+            || old.enableLocalClineLogs != preferences.enableLocalClineLogs
+        if providerSetChanged {
+            // Debounce so flipping several toggles in a row rebuilds once.
+            rebootstrapTask?.cancel()
+            rebootstrapTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.refreshTask?.cancel()
+                self.bootstrap()
+            }
+        } else if old.refreshIntervalSeconds != preferences.refreshIntervalSeconds {
+            startTimer()
+        }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = "无法更改登录项：\(error.localizedDescription)"
+        }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
     private func bootstrap() {
+        isLoadingPreferences = true
         preferences = (try? preferencesStore.load()) ?? .default
+        isLoadingPreferences = false
         #if os(macOS)
         let credentials: CredentialStore = KeychainCredentialStore()
         #else
@@ -208,6 +262,9 @@ final class AppModel: ObservableObject {
         Task {
             await coordinator.setDemoMode(preferences.demoMode)
             await coordinator.applyPinnedAccountIDs(pinnedIDs)
+            // A refresh from the previous coordinator may still be in flight; wait so the
+            // rebuilt provider set (e.g. demo mode toggled) is fetched immediately.
+            while isRefreshing { try? await Task.sleep(nanoseconds: 100_000_000) }
             await refresh(force: true)
             startTimer()
         }
@@ -231,6 +288,13 @@ final class AppModel: ObservableObject {
 
     func supportsOneClickSignIn(providerID: String) -> Bool {
         providerID == "copilot" || providerID == "gemini" || providerID == "antigravity"
+    }
+
+    /// Title of the primary sign-in action for a provider, or nil when it must be configured manually.
+    func signInActionTitle(for providerID: String) -> String? {
+        if supportsOneClickSignIn(providerID: providerID) { return "一键登录" }
+        if CLILoginSpec.entry(for: providerID) != nil { return "终端登录" }
+        return nil
     }
 
     func startOneClickSignIn(providerID: String) {
@@ -354,12 +418,6 @@ final class AppModel: ObservableObject {
         Task { await refresh(force: true) }
     }
 
-    func savePreferences() {
-        try? preferencesStore.save(preferences)
-        refreshTask?.cancel()
-        bootstrap()
-    }
-
     func togglePin(_ accountID: String) {
         Task {
             guard let coordinator else { return }
@@ -375,7 +433,6 @@ final class AppModel: ObservableObject {
                 prefs.pinnedAccountIDs.removeAll { $0 == accountID }
             }
             preferences = prefs
-            try? preferencesStore.save(prefs)
         }
     }
 
