@@ -35,6 +35,9 @@ rm -rf "$DIST/AIQuoty.app"
 mkdir -p "$DIST/AIQuoty.app/Contents/MacOS"
 mkdir -p "$DIST/AIQuoty.app/Contents/Resources"
 cp "$BIN" "$DIST/AIQuoty.app/Contents/MacOS/AIQuoty"
+if [[ -f "$ROOT/Apps/AIQuoty/Resources/AppIcon.icns" ]]; then
+  cp "$ROOT/Apps/AIQuoty/Resources/AppIcon.icns" "$DIST/AIQuoty.app/Contents/Resources/AppIcon.icns"
+fi
 cat > "$DIST/AIQuoty.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -42,6 +45,7 @@ cat > "$DIST/AIQuoty.app/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
   <key>CFBundleExecutable</key><string>AIQuoty</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>local.aiquoty.app</string>
   <key>CFBundleName</key><string>AIQuoty</string>
   <key>CFBundlePackageType</key><string>APPL</string>

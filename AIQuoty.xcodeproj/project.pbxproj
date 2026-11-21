@@ -56,6 +56,7 @@
 		D29F3AE6536D0708E5BBA838 /* libAIQuotyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = F00B5FD918E6FEE1893F4033 /* libAIQuotyCore.a */; };
 		4C1334A21682B8854D8B8E7D /* libAIQuotyCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = F00B5FD918E6FEE1893F4033 /* libAIQuotyCore.a */; };
 		3E4A4877FD61C137953A06D0 /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 2A400EE19704FE773549B7A6 /* Fixtures */; };
+		A1B2C3D4E5F60718293A4B5C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F6E5D4C3B2A1908172635445 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -129,6 +130,7 @@
 		37CC6670B3B70FFA8C2EC3E7 /* RefreshIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshIsolationTests.swift; sourceTree = "<group>"; };
 		42BE11295987F9FC19505F5F /* ResetAndFreshnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResetAndFreshnessTests.swift; sourceTree = "<group>"; };
 		2627B94DB73B33EE564AB686 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F6E5D4C3B2A1908172635445 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2A400EE19704FE773549B7A6 /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fixtures; sourceTree = "<group>"; };
 		F00B5FD918E6FEE1893F4033 /* libAIQuotyCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libAIQuotyCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		B40EFBD977E711F475DD35D4 /* AIQuoty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIQuoty.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -193,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				3B32FA6F3C1B82A2CFEF6630 /* Sources */,
+				F6E5D4C3B2A1908172635445 /* Assets.xcassets */,
 				2627B94DB73B33EE564AB686 /* Info.plist */,
 			);
 			path = AIQuoty;
@@ -489,6 +492,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F60718293A4B5C /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -665,6 +669,7 @@
 		F4F2010C101E513F9FD2BF8C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -685,6 +690,7 @@
 		E2D107BB20EDA4CE6F7C3DB4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
