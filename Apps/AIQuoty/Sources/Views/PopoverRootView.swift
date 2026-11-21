@@ -1,20 +1,29 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
 import AIQuotyCore
 
 struct PopoverRootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @State private var showMenuBarPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if showMenuBarPicker {
+                Divider().opacity(0.35)
+                MenuBarAccountPickerPanel()
+            }
             Divider().opacity(0.35)
             searchBar
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if visibleSnapshots.isEmpty {
+                    if model.activeSignIn != .idle || !model.signInNotice.isEmpty {
+                        SignInProgressBanner()
+                    }
+                    if visibleSnapshots.isEmpty && visibleDetectedAgents.isEmpty {
                         emptyState
                     } else {
                         ForEach(groupedKeys, id: \.self) { group in
@@ -25,9 +34,36 @@ struct PopoverRootView: View {
                                     .padding(.top, 4)
                             }
                             ForEach(snapshots(in: group)) { snap in
-                                AccountCard(snapshot: snap) {
-                                    model.togglePin(snap.account.id)
-                                }
+                                AccountCard(
+                                    snapshot: snap,
+                                    inMenuBar: model.isShownInMenuBar(snap.account.id),
+                                    onToggleMenuBar: {
+                                        model.toggleMenuBarAccount(snap.account.id)
+                                    },
+                                    onPin: {
+                                        model.togglePin(snap.account.id)
+                                    }
+                                )
+                            }
+                        }
+
+                        if !model.preferences.demoMode && !visibleDetectedAgents.isEmpty {
+                            Text("本机已检测到（待连接）")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, visibleSnapshots.isEmpty ? 0 : 6)
+
+                            ForEach(visibleDetectedAgents) { agent in
+                                DetectedAgentCard(
+                                    agent: agent,
+                                    oneClickTitle: oneClickLabel(for: agent.providerID),
+                                    onOneClick: {
+                                        model.startOneClickSignIn(providerID: agent.providerID)
+                                    },
+                                    onConfigure: {
+                                        openSettingsAndActivate()
+                                    }
+                                )
                             }
                         }
                     }
@@ -62,6 +98,18 @@ struct PopoverRootView: View {
         }
     }
 
+    private var visibleDetectedAgents: [DetectedLocalAgent] {
+        let activeProviderIDs = Set(model.state.snapshots.map(\.account.providerID))
+        let unconfigured = model.detectedAgents.filter { !activeProviderIDs.contains($0.providerID) }
+        let q = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return unconfigured }
+        return unconfigured.filter {
+            $0.displayName.lowercased().contains(q)
+                || $0.providerID.lowercased().contains(q)
+                || $0.category.lowercased().contains(q)
+        }
+    }
+
     private var groupedKeys: [String] {
         let keys = Set(visibleSnapshots.map { $0.account.group ?? "" })
         // Named groups first (A–Z), then ungrouped ("").
@@ -84,8 +132,18 @@ struct PopoverRootView: View {
         group.isEmpty ? nil : group
     }
 
+    private func oneClickLabel(for providerID: String) -> String? {
+        if model.supportsOneClickSignIn(providerID: providerID) {
+            return "一键登录"
+        }
+        if CLILoginSpec.entry(for: providerID) != nil {
+            return "终端登录"
+        }
+        return nil
+    }
+
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AIQuoty")
                     .font(.system(.title3, design: .serif).weight(.semibold))
@@ -94,6 +152,23 @@ struct PopoverRootView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showMenuBarPicker.toggle()
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "menubar.rectangle")
+                    if !model.preferences.menuBarAccountIDs.isEmpty && !model.preferences.menuBarIconOnly {
+                        Text("\(model.preferences.menuBarAccountIDs.count)")
+                            .font(.caption2.monospacedDigit())
+                    }
+                }
+            }
+            .foregroundStyle(showMenuBarPicker ? Color.accentColor : Color.primary)
+            .help("选择顶部菜单栏展示的账号")
+            .accessibilityLabel("选择菜单栏展示账号")
+
             Button {
                 Task { await model.refresh(force: true) }
             } label: {
@@ -118,11 +193,11 @@ struct PopoverRootView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(model.preferences.demoMode ? "演示数据加载中…" : "尚未连接任何服务")
                 .font(.headline)
-            Text("在设置中配置 Claude / Codex / Cursor / Gemini 等来源。密钥只写入钥匙串，不要粘贴到聊天里。")
+            Text("在设置中配置 Claude / Codex / Cursor / Antigravity / OpenCode / DeepSeek / Kimi 等主流 Agent 来源。密钥仅写入钥匙串。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("打开设置") { openSettings() }
+            Button("打开设置") { openSettingsAndActivate() }
                 .keyboardShortcut(",", modifiers: [.command])
         }
         .padding(.vertical, 24)
@@ -135,10 +210,22 @@ struct PopoverRootView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             Spacer()
-            Button("仪表盘") { openWindow(id: "dashboard") }
-            Button("设置") { openSettings() }
+            Button("仪表盘") { openDashboardAndActivate() }
+            Button("设置") { openSettingsAndActivate() }
         }
         .padding(10)
+    }
+
+    private func openDashboardAndActivate() {
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: "dashboard")
+        AppWindowActivator.activateWindow(matchingTitle: "仪表盘", identifierHint: "dashboard")
+    }
+
+    private func openSettingsAndActivate() {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        AppWindowActivator.activateWindow(matchingTitle: "设置", identifierHint: "Settings")
     }
 
     private var statusLine: String {
@@ -160,8 +247,179 @@ struct PopoverRootView: View {
     }
 }
 
+struct SignInProgressBanner: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch model.activeSignIn {
+            case .githubDevice(let userCode, let uri):
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("GitHub 授权码：").font(.caption.weight(.semibold))
+                    Text(userCode)
+                        .font(.system(.callout, design: .monospaced).weight(.bold))
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("复制") { CLILoginSpec.copyToClipboard(userCode) }
+                        .controlSize(.mini)
+                    if let url = URL(string: uri) {
+                        Button("打开") { NSWorkspace.shared.open(url) }
+                            .controlSize(.mini)
+                    }
+                    Button("取消") { model.cancelSignIn() }
+                        .controlSize(.mini)
+                }
+            case .googleBrowser(let name):
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("等待浏览器完成 \(name) 授权…")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("取消") { model.cancelSignIn() }
+                        .controlSize(.mini)
+                }
+            case .idle:
+                EmptyView()
+            }
+            if !model.signInNotice.isEmpty {
+                HStack(alignment: .top) {
+                    Text(model.signInNotice)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    if model.activeSignIn == .idle {
+                        Button {
+                            model.signInNotice = ""
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Palette.spend.opacity(0.09), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+struct DetectedAgentCard: View {
+    let agent: DetectedLocalAgent
+    var oneClickTitle: String? = nil
+    var onOneClick: (() -> Void)? = nil
+    var onConfigure: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(agent.displayName)
+                        .font(.system(.callout, design: .default).weight(.semibold))
+                    HStack(spacing: 6) {
+                        Text("已检测")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Palette.spend.opacity(0.14), in: Capsule())
+                            .foregroundStyle(Palette.spend)
+                        Text(agent.category)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if let oneClickTitle, let onOneClick {
+                    Button(oneClickTitle, action: onOneClick)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
+                Button("配置", action: onConfigure)
+                    .controlSize(.small)
+            }
+            Text(agent.setupHint)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Palette.cardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+struct MenuBarAccountPickerPanel: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("菜单栏展示账号")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("自动") { model.resetMenuBarToAuto() }
+                    .controlSize(.mini)
+                    .disabled(!model.preferences.menuBarIconOnly && model.preferences.menuBarAccountIDs.isEmpty)
+                Button("全选") { model.selectAllMenuBarAccounts() }
+                    .controlSize(.mini)
+                    .disabled(model.state.snapshots.isEmpty)
+                Button(model.preferences.menuBarIconOnly ? "显示文字" : "仅图标") {
+                    model.setMenuBarIconOnly(!model.preferences.menuBarIconOnly)
+                }
+                .controlSize(.mini)
+            }
+
+            HStack(spacing: 4) {
+                Image(systemName: "gauge.with.dots.needle.33percent")
+                    .font(.caption2)
+                Text(model.menuBarSummary.isEmpty ? "（仅显示图标）" : model.menuBarSummary)
+                    .font(.caption2.monospacedDigit())
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.cardFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            if model.state.snapshots.isEmpty {
+                Text("暂无已连接账号")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.state.snapshots) { snap in
+                        Toggle(isOn: Binding(
+                            get: { model.isShownInMenuBar(snap.account.id) },
+                            set: { _ in model.toggleMenuBarAccount(snap.account.id) }
+                        )) {
+                            HStack {
+                                Text(snap.account.displayName)
+                                    .font(.caption)
+                                Spacer()
+                                Text(MenuBarFormatter.itemText(for: snap))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Palette.cardFill.opacity(0.6))
+    }
+}
+
 struct AccountCard: View {
     let snapshot: AccountSnapshot
+    var inMenuBar: Bool = false
+    var onToggleMenuBar: (() -> Void)? = nil
     var onPin: () -> Void
 
     var body: some View {
@@ -181,6 +439,15 @@ struct AccountCard: View {
                     }
                 }
                 Spacer()
+                if let onToggleMenuBar {
+                    Button(action: onToggleMenuBar) {
+                        Image(systemName: inMenuBar ? "menubar.rectangle" : "menubar.rectangle")
+                            .foregroundStyle(inMenuBar ? Color.accentColor : Color.secondary.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help(inMenuBar ? "已显示在顶部菜单栏（点击取消）" : "在顶部菜单栏显示此账号")
+                    .accessibilityLabel(inMenuBar ? "从菜单栏移除" : "显示在菜单栏")
+                }
                 Button(action: onPin) {
                     Image(systemName: snapshot.account.pinned ? "pin.fill" : "pin")
                 }
