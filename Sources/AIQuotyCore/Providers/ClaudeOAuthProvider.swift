@@ -7,7 +7,7 @@ public struct ClaudeOAuthProvider: QuotaProvider {
         implementationStatus: .implemented,
         authMethods: [.localCLICredentials, .userPastedToken],
         supportedMetricKinds: [.subscriptionQuota],
-        notes: "读取 ~/.claude/.credentials.json 或 Keychain 中的 OAuth token；调用 api.anthropic.com/api/oauth/usage。不提取浏览器 Cookie。"
+        notes: "自动读取 macOS 钥匙串「Claude Code-credentials」、~/.claude/.credentials.json 或用户覆盖 OAuth token；调用 api.anthropic.com/api/oauth/usage。不提取浏览器 Cookie。"
     )
 
     public var descriptor: ProviderDescriptor { Self.descriptor }
@@ -15,6 +15,7 @@ public struct ClaudeOAuthProvider: QuotaProvider {
     private let credentials: CredentialStore
     private let http: HTTPClient
     private let fileSystem: FileSystemReading
+    private let externalKeychain: ExternalKeychainReading
     private let clock: @Sendable () -> Date
     private let credentialsPath: String
     private let demoFixture: Data?
@@ -23,6 +24,7 @@ public struct ClaudeOAuthProvider: QuotaProvider {
         credentials: CredentialStore,
         http: HTTPClient,
         fileSystem: FileSystemReading,
+        externalKeychain: ExternalKeychainReading = DefaultExternalKeychain.make(),
         clock: @escaping @Sendable () -> Date = { Date() },
         credentialsPath: String = "~/.claude/.credentials.json",
         demoFixture: Data? = nil
@@ -30,6 +32,7 @@ public struct ClaudeOAuthProvider: QuotaProvider {
         self.credentials = credentials
         self.http = http
         self.fileSystem = fileSystem
+        self.externalKeychain = externalKeychain
         self.clock = clock
         self.credentialsPath = credentialsPath
         self.demoFixture = demoFixture
@@ -41,6 +44,9 @@ public struct ClaudeOAuthProvider: QuotaProvider {
         }
         if fileSystem.fileExists(at: credentialsPath) {
             return [AccountIdentity(id: "claude.cli", providerID: "claude", displayName: "Claude Code")]
+        }
+        if externalKeychain.readGenericPassword(service: "Claude Code-credentials") != nil {
+            return [AccountIdentity(id: "claude.keychain", providerID: "claude", displayName: "Claude Code")]
         }
         return []
     }
@@ -64,6 +70,14 @@ public struct ClaudeOAuthProvider: QuotaProvider {
             email = parsed.email
             if let expires = parsed.expiresAt, expires < now {
                 throw ProviderError.authRequired("Claude OAuth 已过期，请在 Claude Code 中重新登录")
+            }
+        } else if let kcData = externalKeychain.readGenericPassword(service: "Claude Code-credentials") {
+            let parsed = try ClaudeCredentialsParser.parse(json: kcData)
+            token = parsed.accessToken
+            accountID = "claude.keychain"
+            email = parsed.email
+            if let expires = parsed.expiresAt, expires < now {
+                throw ProviderError.authRequired("Claude Code 钥匙串 OAuth 已过期，请重新登录 Claude Code")
             }
         } else {
             throw ProviderError.notConfigured("未找到 Claude 凭证。请登录 Claude Code，或在设置中粘贴带 user:profile 范围的 OAuth token 到钥匙串。")

@@ -48,7 +48,11 @@ public struct MemoryFileSystem: FileSystemReading {
     public var files: [String: Data]
 
     public init(files: [String: Data] = [:]) {
-        self.files = files
+        var normalized: [String: Data] = [:]
+        for (k, v) in files {
+            normalized[(k as NSString).expandingTildeInPath] = v
+        }
+        self.files = normalized
     }
 
     public func fileExists(at path: String) -> Bool {

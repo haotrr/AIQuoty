@@ -6,7 +6,11 @@ public struct AppPreferences: Codable, Sendable, Equatable {
     public var refreshIntervalSeconds: TimeInterval
     public var enableLocalClaudeLogs: Bool
     public var enableLocalCodexLogs: Bool
+    public var enableLocalOpenCodeLogs: Bool
+    public var enableLocalClineLogs: Bool
     public var pinnedAccountIDs: [String]
+    public var menuBarAccountIDs: [String]
+    public var menuBarIconOnly: Bool
     public var accountGroups: [String: String]
     public var appearance: Appearance
     public var githubOAuthClientID: String?
@@ -22,7 +26,11 @@ public struct AppPreferences: Codable, Sendable, Equatable {
         refreshIntervalSeconds: TimeInterval = 300,
         enableLocalClaudeLogs: Bool = false,
         enableLocalCodexLogs: Bool = false,
+        enableLocalOpenCodeLogs: Bool = false,
+        enableLocalClineLogs: Bool = false,
         pinnedAccountIDs: [String] = [],
+        menuBarAccountIDs: [String] = [],
+        menuBarIconOnly: Bool = false,
         accountGroups: [String: String] = [:],
         appearance: Appearance = .system,
         githubOAuthClientID: String? = nil
@@ -31,10 +39,30 @@ public struct AppPreferences: Codable, Sendable, Equatable {
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.enableLocalClaudeLogs = enableLocalClaudeLogs
         self.enableLocalCodexLogs = enableLocalCodexLogs
+        self.enableLocalOpenCodeLogs = enableLocalOpenCodeLogs
+        self.enableLocalClineLogs = enableLocalClineLogs
         self.pinnedAccountIDs = pinnedAccountIDs
+        self.menuBarAccountIDs = menuBarAccountIDs
+        self.menuBarIconOnly = menuBarIconOnly
         self.accountGroups = accountGroups
         self.appearance = appearance
         self.githubOAuthClientID = githubOAuthClientID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.demoMode = try c.decodeIfPresent(Bool.self, forKey: .demoMode) ?? false
+        self.refreshIntervalSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .refreshIntervalSeconds) ?? 300
+        self.enableLocalClaudeLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalClaudeLogs) ?? false
+        self.enableLocalCodexLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalCodexLogs) ?? false
+        self.enableLocalOpenCodeLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalOpenCodeLogs) ?? false
+        self.enableLocalClineLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalClineLogs) ?? false
+        self.pinnedAccountIDs = try c.decodeIfPresent([String].self, forKey: .pinnedAccountIDs) ?? []
+        self.menuBarAccountIDs = try c.decodeIfPresent([String].self, forKey: .menuBarAccountIDs) ?? []
+        self.menuBarIconOnly = try c.decodeIfPresent(Bool.self, forKey: .menuBarIconOnly) ?? false
+        self.accountGroups = try c.decodeIfPresent([String: String].self, forKey: .accountGroups) ?? [:]
+        self.appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? .system
+        self.githubOAuthClientID = try c.decodeIfPresent(String.self, forKey: .githubOAuthClientID)
     }
 
     public static let `default` = AppPreferences()

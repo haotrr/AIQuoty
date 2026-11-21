@@ -286,3 +286,242 @@ public struct LocalCodexLogProvider: QuotaProvider {
         ]
     }
 }
+
+public enum OpenCodeLocalLogScanner {
+    /// Scans an OpenCode message JSON file (`~/.local/share/opencode/storage/message/.../*.json`).
+    public static func scan(jsonData: Data) -> LocalTokenAggregate {
+        var agg = LocalTokenAggregate(
+            inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+            uniqueMessageIDs: 0, filesScanned: 1, linesScanned: 1
+        )
+        guard let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let tokens = obj["tokens"] as? [String: Any] else {
+            return agg
+        }
+        agg.inputTokens = int(tokens["input"])
+        agg.outputTokens = int(tokens["output"]) + int(tokens["reasoning"])
+        if let cache = tokens["cache"] as? [String: Any] {
+            agg.cacheReadTokens = int(cache["read"])
+            agg.cacheCreationTokens = int(cache["write"])
+        }
+        if agg.totalTokens > 0 {
+            agg.uniqueMessageIDs = 1
+        }
+        return agg
+    }
+
+    private static func int(_ raw: Any?) -> Int {
+        if let i = raw as? Int { return i }
+        if let d = raw as? Double { return Int(d) }
+        if let s = raw as? String, let i = Int(s) { return i }
+        return 0
+    }
+}
+
+public struct LocalOpenCodeLogProvider: QuotaProvider {
+    public static let descriptor = ProviderDescriptor(
+        id: "local-opencode-logs",
+        displayName: "本地 OpenCode 日志（估算）",
+        implementationStatus: .implemented,
+        authMethods: [.localLogImport],
+        supportedMetricKinds: [.locallyObservedTokens],
+        notes: "扫描 ~/.local/share/opencode/storage/message JSON。仅本地观测 token，不等于订阅剩余。"
+    )
+
+    public var descriptor: ProviderDescriptor { Self.descriptor }
+    private let fileSystem: FileSystemReading
+    private let clock: @Sendable () -> Date
+    private let rootPath: String
+    private let enabled: Bool
+
+    public init(
+        fileSystem: FileSystemReading,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        rootPath: String = "~/.local/share/opencode/storage/message",
+        enabled: Bool = false
+    ) {
+        self.fileSystem = fileSystem
+        self.clock = clock
+        self.rootPath = rootPath
+        self.enabled = enabled
+    }
+
+    public func configuredAccounts() async -> [AccountIdentity] {
+        guard enabled, fileSystem.fileExists(at: rootPath) else { return [] }
+        return [AccountIdentity(id: "local.opencode", providerID: "local-opencode-logs", displayName: "本机 OpenCode 日志")]
+    }
+
+    public func fetch(request: ProviderFetchRequest) async throws -> [AccountSnapshot] {
+        let now = request.now
+        guard enabled else {
+            throw ProviderError.notConfigured("未启用本地 OpenCode 日志导入")
+        }
+        let files = try fileSystem.listFiles(at: rootPath, recursive: true).filter { $0.hasSuffix(".json") }
+        var total = LocalTokenAggregate(
+            inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+            uniqueMessageIDs: 0, filesScanned: 0, linesScanned: 0
+        )
+        for file in files.prefix(1000) {
+            if let data = try? fileSystem.readData(at: file) {
+                let part = OpenCodeLocalLogScanner.scan(jsonData: data)
+                total.inputTokens += part.inputTokens
+                total.outputTokens += part.outputTokens
+                total.cacheReadTokens += part.cacheReadTokens
+                total.cacheCreationTokens += part.cacheCreationTokens
+                total.uniqueMessageIDs += part.uniqueMessageIDs
+                total.filesScanned += 1
+            }
+        }
+        let source = SourceAttribution(id: "local.opencode.storage", label: "本地 OpenCode 会话", detail: rootPath)
+        let metric = MetricValue(
+            kind: .locallyObservedTokens,
+            precision: .estimated,
+            unit: .tokens,
+            value: Double(total.totalTokens),
+            display: "约 \(total.totalTokens) tokens（本地）",
+            source: source,
+            capturedAt: now,
+            freshness: .fresh
+        )
+        return [
+            AccountSnapshot(
+                account: AccountIdentity(id: "local.opencode", providerID: "local-opencode-logs", displayName: "本机 OpenCode 日志"),
+                connection: .connected,
+                localTokenMetrics: [metric],
+                lastSuccessAt: now,
+                lastAttemptAt: now,
+                notes: ["估算值，扫描 \(total.filesScanned) 个 OpenCode 消息文件。"]
+            ),
+        ]
+    }
+}
+
+public enum ClineRooLocalLogScanner {
+    /// Scans Cline / Roo Code `ui_messages.json` for `api_req_started` token metadata.
+    public static func scan(uiMessagesData: Data) -> LocalTokenAggregate {
+        var agg = LocalTokenAggregate(
+            inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+            uniqueMessageIDs: 0, filesScanned: 1, linesScanned: 0
+        )
+        guard let arr = try? JSONSerialization.jsonObject(with: uiMessagesData) as? [[String: Any]] else {
+            return agg
+        }
+        for item in arr {
+            agg.linesScanned += 1
+            guard let text = item["text"] as? String,
+                  let innerData = text.data(using: .utf8),
+                  let info = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] else {
+                continue
+            }
+            let tin = int(info["tokensIn"])
+            let tout = int(info["tokensOut"])
+            let cw = int(info["cacheWrites"])
+            let cr = int(info["cacheReads"])
+            if tin + tout + cw + cr > 0 {
+                agg.inputTokens += tin
+                agg.outputTokens += tout
+                agg.cacheCreationTokens += cw
+                agg.cacheReadTokens += cr
+                agg.uniqueMessageIDs += 1
+            }
+        }
+        return agg
+    }
+
+    private static func int(_ raw: Any?) -> Int {
+        if let i = raw as? Int { return i }
+        if let d = raw as? Double { return Int(d) }
+        if let s = raw as? String, let i = Int(s) { return i }
+        return 0
+    }
+}
+
+public struct LocalClineRooLogProvider: QuotaProvider {
+    public static let descriptor = ProviderDescriptor(
+        id: "cline-roo",
+        displayName: "Cline / Roo Code（本地估算）",
+        implementationStatus: .implemented,
+        authMethods: [.localLogImport],
+        supportedMetricKinds: [.locallyObservedTokens],
+        notes: "扫描 VS Code / Cursor 扩展目录中的 Cline & Roo Code 任务 ui_messages.json。仅本地观测 token，不等于订阅剩余。"
+    )
+
+    public var descriptor: ProviderDescriptor { Self.descriptor }
+    private let fileSystem: FileSystemReading
+    private let clock: @Sendable () -> Date
+    private let rootPaths: [String]
+    private let enabled: Bool
+
+    public init(
+        fileSystem: FileSystemReading,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        rootPaths: [String] = [
+            "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/tasks",
+            "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
+            "~/Library/Application Support/Cursor/User/globalStorage/saoudrizwan.claude-dev/tasks",
+            "~/Library/Application Support/Cursor/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
+        ],
+        enabled: Bool = false
+    ) {
+        self.fileSystem = fileSystem
+        self.clock = clock
+        self.rootPaths = rootPaths
+        self.enabled = enabled
+    }
+
+    public func configuredAccounts() async -> [AccountIdentity] {
+        guard enabled, rootPaths.contains(where: { fileSystem.fileExists(at: $0) }) else { return [] }
+        return [AccountIdentity(id: "local.cline-roo", providerID: "cline-roo", displayName: "Cline / Roo Code")]
+    }
+
+    public func fetch(request: ProviderFetchRequest) async throws -> [AccountSnapshot] {
+        let now = request.now
+        guard enabled else {
+            throw ProviderError.notConfigured("未启用 Cline / Roo Code 本地日志导入")
+        }
+        var total = LocalTokenAggregate(
+            inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+            uniqueMessageIDs: 0, filesScanned: 0, linesScanned: 0
+        )
+        for root in rootPaths where fileSystem.fileExists(at: root) {
+            let files = (try? fileSystem.listFiles(at: root, recursive: true))?
+                .filter { $0.hasSuffix("ui_messages.json") } ?? []
+            for file in files.prefix(300) {
+                if let data = try? fileSystem.readData(at: file) {
+                    let part = ClineRooLocalLogScanner.scan(uiMessagesData: data)
+                    total.inputTokens += part.inputTokens
+                    total.outputTokens += part.outputTokens
+                    total.cacheReadTokens += part.cacheReadTokens
+                    total.cacheCreationTokens += part.cacheCreationTokens
+                    total.uniqueMessageIDs += part.uniqueMessageIDs
+                    total.filesScanned += 1
+                    total.linesScanned += part.linesScanned
+                }
+            }
+        }
+        guard total.filesScanned > 0 else {
+            throw ProviderError.notConfigured("未找到 Cline / Roo Code 本地任务日志")
+        }
+        let source = SourceAttribution(id: "local.cline.tasks", label: "本地 Cline / Roo 任务日志", detail: "globalStorage/*/tasks")
+        let metric = MetricValue(
+            kind: .locallyObservedTokens,
+            precision: .estimated,
+            unit: .tokens,
+            value: Double(total.totalTokens),
+            display: "约 \(total.totalTokens) tokens（本地）",
+            source: source,
+            capturedAt: now,
+            freshness: .fresh
+        )
+        return [
+            AccountSnapshot(
+                account: AccountIdentity(id: "local.cline-roo", providerID: "cline-roo", displayName: "Cline / Roo Code"),
+                connection: .connected,
+                localTokenMetrics: [metric],
+                lastSuccessAt: now,
+                lastAttemptAt: now,
+                notes: ["估算值，扫描 \(total.filesScanned) 个任务日志，共 \(total.uniqueMessageIDs) 次请求。"]
+            ),
+        ]
+    }
+}

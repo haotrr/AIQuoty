@@ -12,6 +12,7 @@ struct AIQuotyCLI {
 
                 用法:
                   aiquoty-cli status [--demo]
+                  aiquoty-cli detect
                   aiquoty-cli providers
                   aiquoty-cli coverage
 
@@ -32,48 +33,43 @@ struct AIQuotyCLI {
             return
         }
 
+        if args.first == "detect" {
+            let detected = LocalAgentDetector.detect(fileSystem: LocalFileSystem())
+            print("Detected local AI Agents: \(detected.count)")
+            for item in detected {
+                print("• \(item.displayName) (\(item.providerID)) [\(item.category)]")
+                print("  paths: \(item.matchedPaths.joined(separator: ", "))")
+                print("  hint:  \(item.setupHint)")
+            }
+            return
+        }
+
         let demo = args.contains("--demo")
-        let credentials = InMemoryCredentialStore()
+        #if os(macOS)
+        let credentials: CredentialStore = demo ? InMemoryCredentialStore() : KeychainCredentialStore()
+        #else
+        let credentials: CredentialStore = InMemoryCredentialStore()
+        #endif
         let fs = LocalFileSystem()
         let http = URLSessionHTTPClient()
         var providers = ProviderRegistry.makeLiveProviders(credentials: credentials, http: http, fileSystem: fs)
 
         if demo {
+            let memFS = MemoryFileSystem()
             providers = [
-                ClaudeOAuthProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    fileSystem: MemoryFileSystem(),
-                    demoFixture: DemoFixtures.claudeUsageJSON
-                ),
-                CodexOAuthProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    fileSystem: MemoryFileSystem(),
-                    demoFixture: DemoFixtures.codexUsageJSON
-                ),
-                CursorSessionProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    fileSystem: MemoryFileSystem(),
-                    demoFixture: DemoFixtures.cursorUsageJSON
-                ),
-                GeminiCLIProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    fileSystem: MemoryFileSystem(),
-                    demoFixture: DemoFixtures.geminiQuotaJSON
-                ),
-                CopilotProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    demoFixture: DemoFixtures.copilotUserJSON
-                ),
-                OpenRouterProvider(
-                    credentials: credentials,
-                    http: FixtureHTTPClient(),
-                    demoFixture: DemoFixtures.openRouterKeyJSON
-                ),
+                ClaudeOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.claudeUsageJSON),
+                CodexOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.codexUsageJSON),
+                CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, cursorStateReader: NullCursorStateReader(), demoFixture: DemoFixtures.cursorUsageJSON),
+                AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.antigravityQuotaJSON),
+                GeminiCLIProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.geminiQuotaJSON),
+                OpenCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.openCodeUsageJSON),
+                DeepSeekProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.deepSeekBalanceJSON),
+                CopilotProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.copilotUserJSON),
+                KimiCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoSubscriptionFixture: DemoFixtures.kimiCodeUsageJSON, demoBalanceFixture: DemoFixtures.moonshotBalanceJSON),
+                MiniMaxProvider(credentials: credentials, http: FixtureHTTPClient(), demoFixture: DemoFixtures.miniMaxRemainsJSON),
+                ZaiGLMProvider(credentials: credentials, http: FixtureHTTPClient(), demoFixture: DemoFixtures.zaiQuotaJSON),
+                FactoryDroidProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.factoryUsageJSON),
+                OpenRouterProvider(credentials: credentials, http: FixtureHTTPClient(), demoFixture: DemoFixtures.openRouterKeyJSON),
             ]
         }
 
@@ -98,6 +94,16 @@ struct AIQuotyCLI {
             }
             if let err = snap.lastError {
                 print("  ! \(err)")
+            }
+        }
+        if !demo {
+            let activeIDs = Set(state.snapshots.map(\.account.providerID))
+            let unconfigured = LocalAgentDetector.detect(fileSystem: fs).filter { !activeIDs.contains($0.providerID) }
+            if !unconfigured.isEmpty {
+                print("Detected local apps awaiting setup (\(unconfigured.count)):")
+                for app in unconfigured {
+                    print("  • \(app.displayName) (\(app.providerID)) — \(app.setupHint)")
+                }
             }
         }
         if !state.providerErrors.isEmpty {

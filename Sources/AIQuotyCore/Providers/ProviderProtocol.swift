@@ -91,20 +91,25 @@ public enum ProviderRegistry {
         ClaudeOAuthProvider.descriptor,
         CodexOAuthProvider.descriptor,
         CursorSessionProvider.descriptor,
+        AntigravityProvider.descriptor,
         GeminiCLIProvider.descriptor,
+        OpenCodeProvider.descriptor,
+        DeepSeekProvider.descriptor,
         CopilotProvider.descriptor,
+        KimiCodeProvider.descriptor,
+        MiniMaxProvider.descriptor,
+        ZaiGLMProvider.descriptor,
+        FactoryDroidProvider.descriptor,
+        WindsurfProvider.descriptor,
+        GrokProvider.descriptor,
         OpenRouterProvider.descriptor,
         AnthropicAdminSpendProvider.descriptor,
         LocalClaudeLogProvider.descriptor,
         LocalCodexLogProvider.descriptor,
-        UnimplementedProviders.windsurf,
-        UnimplementedProviders.antigravity,
-        UnimplementedProviders.factoryDroid,
-        UnimplementedProviders.kimiCode,
-        UnimplementedProviders.openCode,
-        UnimplementedProviders.clineRoo,
+        LocalOpenCodeLogProvider.descriptor,
+        LocalClineRooLogProvider.descriptor,
         UnimplementedProviders.traeQoder,
-        UnimplementedProviders.grok,
+        UnimplementedProviders.zed,
     ]
 
     public static func makeLiveProviders(
@@ -117,79 +122,42 @@ public enum ProviderRegistry {
             ClaudeOAuthProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             CodexOAuthProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             CursorSessionProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            AntigravityProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             GeminiCLIProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
-            CopilotProvider(credentials: credentials, http: http, clock: clock),
+            OpenCodeProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            DeepSeekProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            CopilotProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            KimiCodeProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            MiniMaxProvider(credentials: credentials, http: http, clock: clock),
+            ZaiGLMProvider(credentials: credentials, http: http, clock: clock),
+            FactoryDroidProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            WindsurfProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            GrokProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             OpenRouterProvider(credentials: credentials, http: http, clock: clock),
             AnthropicAdminSpendProvider(credentials: credentials, http: http, clock: clock),
             LocalClaudeLogProvider(fileSystem: fileSystem, clock: clock),
             LocalCodexLogProvider(fileSystem: fileSystem, clock: clock),
+            LocalOpenCodeLogProvider(fileSystem: fileSystem, clock: clock),
+            LocalClineRooLogProvider(fileSystem: fileSystem, clock: clock),
         ]
     }
 }
 
 public enum UnimplementedProviders {
-    public static let windsurf = ProviderDescriptor(
-        id: "windsurf",
-        displayName: "Windsurf",
-        implementationStatus: .unimplemented,
-        authMethods: [.none],
-        supportedMetricKinds: [],
-        notes: "首版未实现。需要经用户同意的会话导入或官方 API；不做浏览器会话提取。"
-    )
-    public static let antigravity = ProviderDescriptor(
-        id: "antigravity",
-        displayName: "Antigravity",
-        implementationStatus: .unimplemented,
-        authMethods: [.none],
-        supportedMetricKinds: [],
-        notes: "首版未实现。可后续对接 Google OAuth / 本地 language server（文档化路径）。"
-    )
-    public static let factoryDroid = ProviderDescriptor(
-        id: "factory-droid",
-        displayName: "Factory / Droid",
-        implementationStatus: .unimplemented,
-        authMethods: [.apiKeyInKeychain],
-        supportedMetricKinds: [.subscriptionQuota],
-        notes: "首版未实现。规划：用户粘贴 Factory API Key → api.factory.ai（需核实文档）。"
-    )
-    public static let kimiCode = ProviderDescriptor(
-        id: "kimi-code",
-        displayName: "Kimi Code",
-        implementationStatus: .unimplemented,
-        authMethods: [.none],
-        supportedMetricKinds: [],
-        notes: "首版未实现。"
-    )
-    public static let openCode = ProviderDescriptor(
-        id: "opencode",
-        displayName: "OpenCode",
-        implementationStatus: .unimplemented,
-        authMethods: [.none],
-        supportedMetricKinds: [],
-        notes: "首版未实现。"
-    )
-    public static let clineRoo = ProviderDescriptor(
-        id: "cline-roo",
-        displayName: "Cline / Roo",
-        implementationStatus: .unimplemented,
-        authMethods: [.none],
-        supportedMetricKinds: [],
-        notes: "首版未实现。可能依赖各模型供应商密钥的本地用量，而非统一订阅配额。"
-    )
     public static let traeQoder = ProviderDescriptor(
         id: "trae-qoder",
         displayName: "Trae / Qoder",
         implementationStatus: .unimplemented,
         authMethods: [.none],
         supportedMetricKinds: [],
-        notes: "首版未实现。"
+        notes: "支持检测本机安装，但官方暂未公开稳定配额 API；不做浏览器会话窃取。"
     )
-    public static let grok = ProviderDescriptor(
-        id: "grok",
-        displayName: "Grok",
+    public static let zed = ProviderDescriptor(
+        id: "zed",
+        displayName: "Zed AI",
         implementationStatus: .unimplemented,
-        authMethods: [.localCLICredentials],
-        supportedMetricKinds: [.subscriptionQuota],
-        notes: "首版未实现。规划：用户同意后读取 Grok CLI auth.json（不自动提取浏览器会话）。"
+        authMethods: [.none],
+        supportedMetricKinds: [],
+        notes: "支持检测本机安装；Zed Pro 配额接口暂未公开，可配合各模型 API Key 监控。"
     )
 }

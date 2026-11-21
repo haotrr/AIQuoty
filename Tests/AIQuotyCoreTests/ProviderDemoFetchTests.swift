@@ -33,7 +33,8 @@ final class ProviderDemoFetchTests: XCTestCase {
         let provider = ClaudeOAuthProvider(
             credentials: InMemoryCredentialStore(),
             http: FixtureHTTPClient(),
-            fileSystem: MemoryFileSystem()
+            fileSystem: MemoryFileSystem(),
+            externalKeychain: NullExternalKeychainReader()
         )
         let coordinator = RefreshCoordinator(providers: [provider])
         let state = await coordinator.refreshAll(force: true)
