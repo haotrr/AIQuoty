@@ -128,6 +128,7 @@ final class AppModel: ObservableObject {
     @Published var signInNotice: String = ""
     @Published private(set) var launchAtLogin: Bool = false
     @Published var launchAtLoginError: String?
+    @Published private(set) var webDashboardURL: URL?
 
     var preferredColorScheme: ColorScheme? {
         switch preferences.appearance {
@@ -142,6 +143,7 @@ final class AppModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var signInTask: Task<Void, Never>?
     private var activeLoopbackServer: LoopbackOAuthServer?
+    private var webDashboardServer: LocalWebDashboardServer?
     private var isLoadingPreferences = false
     private var rebootstrapTask: Task<Void, Never>?
 
@@ -220,6 +222,52 @@ final class AppModel: ObservableObject {
     init() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         bootstrap()
+        startWebDashboardServer()
+    }
+
+    // MARK: Local Web Dashboard Server
+
+    private func startWebDashboardServer() {
+        let server = LocalWebDashboardServer(preferredPort: 8787) { [weak self] demo in
+            if demo {
+                let providers = await MainActor.run { Self.demoProviders() }
+                let demoCoordinator = RefreshCoordinator(providers: providers)
+                await demoCoordinator.setDemoMode(true)
+                let demoState = await demoCoordinator.refreshAll(force: true)
+                return LocalWebDashboardServer.StatusPayload(
+                    demo: true,
+                    generatedAt: Date(),
+                    snapshots: demoState.snapshots,
+                    providerErrors: demoState.providerErrors
+                )
+            }
+            let currentState: RefreshCoordinator.State = await MainActor.run { [weak self] in
+                self?.state ?? .init()
+            }
+            return LocalWebDashboardServer.StatusPayload(
+                demo: currentState.demoMode,
+                generatedAt: Date(),
+                snapshots: currentState.snapshots,
+                providerErrors: currentState.providerErrors
+            )
+        }
+        webDashboardServer = server
+        server.start { [weak self] url in
+            Task { @MainActor in
+                self?.webDashboardURL = url
+            }
+        }
+    }
+
+    func openWebDashboard() {
+        if let url = webDashboardURL ?? webDashboardServer?.currentURL {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        startWebDashboardServer()
+        if let fallback = URL(string: "http://127.0.0.1:8787/") {
+            NSWorkspace.shared.open(fallback)
+        }
     }
 
     // MARK: Preferences

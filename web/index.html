@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIQuoty · 配额看板</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- Top compact chrome bar -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+            <path d="M12 2.5L14.4 9.6L21.5 12L14.4 14.4L12 21.5L9.6 14.4L2.5 12L9.6 9.6L12 2.5Z" fill="url(#brandGrad)"/>
+            <defs>
+              <linearGradient id="brandGrad" x1="2.5" y1="2.5" x2="21.5" y2="21.5" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#8B5CF6"/>
+                <stop offset="1" stop-color="#3B82F6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        <span class="brand-title">AIQuoty</span>
+        <span class="brand-divider">·</span>
+        <span class="brand-sub">配额看板</span>
+      </div>
+
+      <!-- Mini weekly remaining strip (mirrors top-right pill bar in screenshot) -->
+      <div class="mini-strip" id="miniStrip" aria-label="本周剩余摘要"></div>
+
+      <div class="topbar-actions">
+        <div class="mode-switch" role="tablist" aria-label="数据源模式">
+          <button class="mode-btn is-active" data-mode="live" role="tab" aria-selected="true">实时数据</button>
+          <button class="mode-btn" data-mode="demo" role="tab" aria-selected="false">全量数据</button>
+        </div>
+        <button class="icon-btn" id="refreshBtn" title="刷新配额数据" aria-label="刷新配额数据">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+          <span>刷新</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="canvas">
+    <div class="dashboard">
+      <!-- Global Quota Health Summary Banner -->
+      <section class="surface health-banner" id="healthBanner" aria-live="polite">
+        <div class="health-eyebrow" id="healthEyebrow">全局额度健康度 · 正在读取本机数据…</div>
+        <h1 class="health-headline" id="healthHeadline">正在加载配额…</h1>
+        <div class="health-pills" id="healthPills"></div>
+      </section>
+
+      <!-- Notice banner for live connection status / fallback hints -->
+      <div class="status-toast" id="statusToast" hidden></div>
+
+      <!-- Bento 2-Column Grid: Account Cards + Compute Compass -->
+      <section class="bento-grid" id="bentoGrid" aria-label="配额卡片网格"></section>
+    </div>
+  </main>
+
+  <!-- Floating Rate / Detail Modal Popover -->
+  <div class="modal-backdrop" id="rateModalBackdrop" hidden>
+    <div class="rate-modal" role="dialog" aria-modal="true" aria-labelledby="rateModalTitle">
+      <div class="rate-modal-header">
+        <div class="rate-modal-title-wrap">
+          <span class="rate-modal-icon" id="rateModalIcon"></span>
+          <div>
+            <h2 class="rate-modal-title" id="rateModalTitle">速率与消耗详情</h2>
+            <p class="rate-modal-sub" id="rateModalSub"></p>
+          </div>
+        </div>
+        <button class="modal-close" id="rateModalClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="rate-modal-body" id="rateModalBody"></div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

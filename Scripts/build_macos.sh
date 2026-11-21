@@ -38,6 +38,10 @@ cp "$BIN" "$DIST/AIQuoty.app/Contents/MacOS/AIQuoty"
 if [[ -f "$ROOT/Apps/AIQuoty/Resources/AppIcon.icns" ]]; then
   cp "$ROOT/Apps/AIQuoty/Resources/AppIcon.icns" "$DIST/AIQuoty.app/Contents/Resources/AppIcon.icns"
 fi
+if [[ -d "$ROOT/web" ]]; then
+  rm -rf "$DIST/AIQuoty.app/Contents/Resources/Web"
+  cp -R "$ROOT/web" "$DIST/AIQuoty.app/Contents/Resources/Web"
+fi
 cat > "$DIST/AIQuoty.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

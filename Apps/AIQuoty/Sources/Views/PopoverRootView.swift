@@ -219,6 +219,17 @@ struct PopoverRootView: View {
             Spacer(minLength: 4)
             menuBarPickerMenu
             Button {
+                model.openWebDashboard()
+            } label: {
+                Image(systemName: "globe")
+                    .font(.caption)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("在浏览器中打开 Web 看板")
+            .accessibilityLabel("打开 Web 看板")
+            Button {
                 openDashboardAndActivate()
             } label: {
                 Image(systemName: "rectangle.grid.2x2")
@@ -367,6 +378,7 @@ struct PopoverRootView: View {
             .help("设置（⌘,）")
             .accessibilityLabel("设置")
             Menu {
+                Button("打开 Web 看板…") { model.openWebDashboard() }
                 Button("打开仪表盘…") { openDashboardAndActivate() }
                     .keyboardShortcut("d", modifiers: [.command])
                 Button("设置…") { openSettingsAndActivate() }

@@ -11,7 +11,7 @@ struct AIQuotyCLI {
                 AIQuoty CLI — 本机优先的 AI Agent 配额读取工具
 
                 用法:
-                  aiquoty-cli status [--demo]
+                  aiquoty-cli status [--demo] [--json]
                   aiquoty-cli detect
                   aiquoty-cli providers
                   aiquoty-cli coverage
@@ -45,6 +45,7 @@ struct AIQuotyCLI {
         }
 
         let demo = args.contains("--demo")
+        let jsonOutput = args.contains("--json")
         #if os(macOS)
         let credentials: CredentialStore = demo ? InMemoryCredentialStore() : KeychainCredentialStore()
         #else
@@ -76,6 +77,29 @@ struct AIQuotyCLI {
         let coordinator = RefreshCoordinator(providers: providers)
         await coordinator.setDemoMode(demo)
         let state = await coordinator.refreshAll(force: true)
+
+        if jsonOutput {
+            struct StatusJSONPayload: Encodable {
+                let demo: Bool
+                let generatedAt: Date
+                let snapshots: [AccountSnapshot]
+                let providerErrors: [String: String]
+            }
+            let payload = StatusJSONPayload(
+                demo: demo,
+                generatedAt: Date(),
+                snapshots: state.snapshots,
+                providerErrors: state.providerErrors
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(payload), let text = String(data: data, encoding: .utf8) {
+                print(text)
+            }
+            return
+        }
+
         print("AIQuoty \(demo ? "DEMO" : "LIVE") — accounts: \(state.snapshots.count)")
         for snap in state.snapshots {
             print("• \(snap.account.displayName) [\(snap.connection.rawValue)] \(snap.account.planLabel ?? "")")
