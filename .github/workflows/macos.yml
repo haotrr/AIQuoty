@@ -1,0 +1,48 @@
+name: macOS
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  core-linux:
+    name: Core tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Swift
+        run: |
+          set -euo pipefail
+          SWIFT_VERSION=6.0.3
+          curl -fsSL -o /tmp/swift.tar.gz \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2404/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu24.04.tar.gz"
+          sudo tar -xzf /tmp/swift.tar.gz -C /opt
+          echo "/opt/swift-${SWIFT_VERSION}-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libncurses6
+      - name: Test + demo CLI
+        run: |
+          chmod +x Scripts/test_linux.sh
+          Scripts/test_linux.sh
+
+  macos-app:
+    name: Build .app (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app || true
+      - name: Test core
+        run: swift test
+      - name: Package app
+        run: |
+          chmod +x Scripts/build_macos.sh
+          Scripts/build_macos.sh
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIQuoty-macos14
+          path: |
+            dist/AIQuoty.app
+            dist/AIQuoty-macos14.zip

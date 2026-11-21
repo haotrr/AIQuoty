@@ -1,0 +1,8 @@
+{
+  "five_hour": { "utilization": 0.42, "resetsAt": 1893456000 },
+  "seven_day": { "utilization": 0.67, "resetsAt": 1893888000 },
+  "seven_day_sonnet": { "utilization": 12, "resets_at": "2030-01-02T00:00:00Z" },
+  "seven_day_opus": null,
+  "extra_usage": { "is_enabled": false },
+  "subscriptionType": "max"
+}

@@ -1,0 +1,21 @@
+{
+  "email": "codex@example.com",
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 55,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 2547,
+      "reset_at": 1893456000
+    },
+    "secondary_window": {
+      "used_percent": 31,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 489405,
+      "reset_at": 1893888000
+    }
+  },
+  "credits": { "has_credits": true, "balance": "4.20" }
+}

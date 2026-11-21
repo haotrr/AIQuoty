@@ -1,0 +1,10 @@
+{
+  "email": "cursor@example.com",
+  "membershipType": "pro",
+  "billingCycleEnd": "2030-02-01T00:00:00Z",
+  "individualUsage": {
+    "plan": { "usedPercent": 72, "billingCycleEnd": "2030-02-01T00:00:00Z" },
+    "auto": { "usedPercent": 40 },
+    "api": { "used": 12, "limit": 100 }
+  }
+}
