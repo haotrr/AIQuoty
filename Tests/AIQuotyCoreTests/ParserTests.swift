@@ -99,7 +99,12 @@ final class ParserTests: XCTestCase {
     }
 
     private func fixture(_ relative: String) throws -> Data {
-        let base = Bundle.module.resourceURL!.appendingPathComponent("Fixtures")
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle(for: Self.self)
+        #endif
+        let base = bundle.resourceURL!.appendingPathComponent("Fixtures")
         let file = base.appendingPathComponent(relative)
         return try Data(contentsOf: file)
     }

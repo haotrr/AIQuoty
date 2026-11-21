@@ -10,14 +10,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 2
 fi
 
+if [[ -z "${DEVELOPER_DIR:-}" ]] && [[ "$(xcode-select -p 2>/dev/null || true)" == "/Library/Developer/CommandLineTools" ]] && [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
+  export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
+
 swift --version
 swift test --package-path "$ROOT"
 
-APP_DIR="$ROOT/Apps/AIQuoty"
-cd "$APP_DIR"
-swift build -c release
+swift build --package-path "$ROOT" -c release --product AIQuoty
 
-BIN="$(swift build -c release --show-bin-path)/AIQuoty"
+BIN="$(swift build --package-path "$ROOT" -c release --product AIQuoty --show-bin-path)/AIQuoty"
 DIST="$ROOT/dist"
 rm -rf "$DIST/AIQuoty.app"
 mkdir -p "$DIST/AIQuoty.app/Contents/MacOS"
@@ -42,7 +44,17 @@ cat > "$DIST/AIQuoty.app/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$DIST/AIQuoty.app" || true
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application:|Apple Development:/ {print $2; exit}' || true)"
+fi
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "Signing with identity: $SIGN_IDENTITY"
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$DIST/AIQuoty.app"
+else
+  echo "Signing ad-hoc (no local Apple Development / Developer ID identity found)"
+  codesign --force --deep --sign - "$DIST/AIQuoty.app" || true
+fi
 ditto -c -k --sequesterRsrc --keepParent "$DIST/AIQuoty.app" "$DIST/AIQuoty-macos14.zip"
 echo "Built: $DIST/AIQuoty.app"
 echo "Zip:   $DIST/AIQuoty-macos14.zip"

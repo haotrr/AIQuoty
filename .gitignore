@@ -4,6 +4,7 @@ DerivedData/
 dist/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+xcuserdata/
 .DS_Store
 *.app
 *.zip
