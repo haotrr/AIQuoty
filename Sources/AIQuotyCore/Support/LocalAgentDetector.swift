@@ -78,9 +78,10 @@ public enum LocalAgentDetector {
                 "/Applications/Antigravity.app",
                 "/Applications/Antigravity IDE.app",
                 "~/.gemini/antigravity",
+                "~/Library/Application Support/Antigravity",
                 "~/Library/Application Support/antigravity",
             ],
-            setupHint: "点「一键登录」通过浏览器完成 Google OAuth 授权并自动续期。"
+            setupHint: "登录 Antigravity 桌面端即可自动读取 state.vscdb，无需填写 Key；也支持在设置中配置 OAuth。"
         ),
         Rule(
             providerID: "gemini",

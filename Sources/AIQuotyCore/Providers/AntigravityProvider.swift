@@ -1,13 +1,16 @@
 import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#endif
 
 public struct AntigravityProvider: QuotaProvider {
     public static let descriptor = ProviderDescriptor(
         id: "antigravity",
         displayName: "Antigravity",
         implementationStatus: .implemented,
-        authMethods: [.userPastedToken, .localCLICredentials],
+        authMethods: [.localCLICredentials, .userPastedToken],
         supportedMetricKinds: [.subscriptionQuota],
-        notes: "支持应用内一键 Google OAuth 登录（自动续期）或钥匙串 OAuth Token，通过 loadCodeAssist + fetchAvailableModels 查询各模型族配额。"
+        notes: "优先自动只读复用本机 Antigravity 桌面端登录态（state.vscdb），无需手动填 Key；也支持应用内 Google OAuth 或钥匙串 Token。"
     )
 
     public var descriptor: ProviderDescriptor { Self.descriptor }
@@ -15,6 +18,7 @@ public struct AntigravityProvider: QuotaProvider {
     private let credentials: CredentialStore
     private let http: HTTPClient
     private let fileSystem: FileSystemReading
+    private let stateReader: AntigravityStateReading
     private let clock: @Sendable () -> Date
     private let demoFixture: Data?
 
@@ -22,22 +26,27 @@ public struct AntigravityProvider: QuotaProvider {
         credentials: CredentialStore,
         http: HTTPClient,
         fileSystem: FileSystemReading,
+        stateReader: AntigravityStateReading = SQLiteAntigravityStateReader(),
         clock: @escaping @Sendable () -> Date = { Date() },
         demoFixture: Data? = nil
     ) {
         self.credentials = credentials
         self.http = http
         self.fileSystem = fileSystem
+        self.stateReader = stateReader
         self.clock = clock
         self.demoFixture = demoFixture
     }
 
     public func configuredAccounts() async -> [AccountIdentity] {
-        if let bundle = GoogleOAuthBundle.load(from: credentials, account: CredentialAccount.antigravityOAuthBundle) {
-            return [AccountIdentity(id: "antigravity.oauth", providerID: "antigravity", displayName: "Antigravity", email: bundle.email)]
-        }
         if let token = try? credentials.getSecret(account: CredentialAccount.antigravityOAuthToken), !token.isEmpty {
             return [AccountIdentity(id: "antigravity.token", providerID: "antigravity", displayName: "Antigravity")]
+        }
+        if let local = stateReader.readLocalState() {
+            return [AccountIdentity(id: "antigravity.desktop", providerID: "antigravity", displayName: "Antigravity", email: local.email)]
+        }
+        if let bundle = GoogleOAuthBundle.load(from: credentials, account: CredentialAccount.antigravityOAuthBundle) {
+            return [AccountIdentity(id: "antigravity.oauth", providerID: "antigravity", displayName: "Antigravity", email: bundle.email)]
         }
         return []
     }
@@ -49,8 +58,15 @@ public struct AntigravityProvider: QuotaProvider {
         }
         let token: String
         var email: String?
-        var accountID = "antigravity.oauth"
-        if let oauth = try await GoogleOAuthFlow.validAccessToken(
+        var accountID = "antigravity.desktop"
+        if let manual = try credentials.getSecret(account: CredentialAccount.antigravityOAuthToken), !manual.isEmpty {
+            token = manual
+            accountID = "antigravity.token"
+        } else if let local = stateReader.readLocalState() {
+            token = local.accessToken
+            email = local.email
+            accountID = "antigravity.desktop"
+        } else if let oauth = try await GoogleOAuthFlow.validAccessToken(
             http: http,
             app: .antigravity,
             credentials: credentials,
@@ -59,11 +75,8 @@ public struct AntigravityProvider: QuotaProvider {
             token = oauth.accessToken
             email = oauth.email
             accountID = "antigravity.oauth"
-        } else if let manual = try credentials.getSecret(account: CredentialAccount.antigravityOAuthToken), !manual.isEmpty {
-            token = manual
-            accountID = "antigravity.token"
         } else {
-            throw ProviderError.notConfigured("未配置 Antigravity。可在设置或弹窗中一键 Google 登录。")
+            throw ProviderError.notConfigured("未检测到本机 Antigravity 登录态。请先打开 Antigravity 桌面端登录，或在设置中配置 OAuth / Access Token。")
         }
 
         let headers: [String: String] = [
@@ -374,4 +387,310 @@ public enum AntigravityQuotaParser {
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return iso.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
+}
+
+// MARK: - Local desktop state reader (read-only SQLite, never decrypts Safe Storage)
+
+public struct AntigravityLocalState: Sendable, Equatable {
+    public var accessToken: String
+    public var refreshToken: String?
+    public var email: String?
+
+    public init(accessToken: String, refreshToken: String? = nil, email: String? = nil) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.email = email
+    }
+}
+
+public protocol AntigravityStateReading: Sendable {
+    func readLocalState() -> AntigravityLocalState?
+}
+
+public struct NullAntigravityStateReader: AntigravityStateReading {
+    public init() {}
+    public func readLocalState() -> AntigravityLocalState? { nil }
+}
+
+/// Parses Antigravity desktop `state.vscdb` ItemTable entries into a local OAuth state.
+public enum AntigravityStateParser {
+    public static func parse(authStatusJSON: String?, oauthStateValues: [String]) -> AntigravityLocalState? {
+        var accessToken: String?
+        var refreshToken: String?
+        var email: String?
+
+        if let authStatusJSON, let data = authStatusJSON.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let e = obj["email"] as? String, isLikelyEmail(e) {
+                email = e
+            }
+            for key in ["apiKey", "accessToken", "access_token", "oauthToken"] {
+                if let tok = obj[key] as? String, isGoogleAccessToken(tok) {
+                    accessToken = tok
+                    break
+                }
+            }
+        }
+
+        for raw in oauthStateValues where !raw.isEmpty {
+            var foundAccess: String?
+            var foundRefresh: String?
+            var foundEmail: String?
+            extractFromEncodedValue(raw, depth: 0, accessToken: &foundAccess, refreshToken: &foundRefresh, email: &foundEmail)
+            if accessToken == nil, let foundAccess { accessToken = foundAccess }
+            if refreshToken == nil, let foundRefresh { refreshToken = foundRefresh }
+            if email == nil, let foundEmail { email = foundEmail }
+            if accessToken != nil && email != nil { break }
+        }
+
+        guard let accessToken else { return nil }
+        return AntigravityLocalState(accessToken: accessToken, refreshToken: refreshToken, email: email)
+    }
+
+    private static func extractFromEncodedValue(
+        _ raw: String,
+        depth: Int,
+        accessToken: inout String?,
+        refreshToken: inout String?,
+        email: inout String?
+    ) {
+        guard depth <= 6 else { return }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if isGoogleAccessToken(trimmed) {
+            if accessToken == nil { accessToken = trimmed }
+            return
+        }
+        if isGoogleRefreshToken(trimmed) {
+            if refreshToken == nil { refreshToken = trimmed }
+            return
+        }
+        if email == nil && isLikelyEmail(trimmed) {
+            email = trimmed
+            return
+        }
+
+        if let decoded = decodeBase64Flexible(trimmed) {
+            walkProtobuf(decoded, depth: depth + 1, accessToken: &accessToken, refreshToken: &refreshToken, email: &email)
+            scanASCIITokens(in: decoded, accessToken: &accessToken, refreshToken: &refreshToken, email: &email)
+        }
+    }
+
+    private static func walkProtobuf(
+        _ data: Data,
+        depth: Int,
+        accessToken: inout String?,
+        refreshToken: inout String?,
+        email: inout String?
+    ) {
+        guard depth <= 6, !data.isEmpty else { return }
+        let bytes = [UInt8](data)
+        var i = 0
+        while i < bytes.count {
+            guard let (tag, nextAfterTag) = readVarint(bytes, from: i) else { break }
+            i = nextAfterTag
+            let wireType = Int(tag & 0x7)
+            switch wireType {
+            case 0: // varint
+                guard let (_, next) = readVarint(bytes, from: i) else { return }
+                i = next
+            case 1: // 64-bit
+                guard i + 8 <= bytes.count else { return }
+                i += 8
+            case 2: // length-delimited
+                guard let (len, start) = readVarint(bytes, from: i) else { return }
+                let count = Int(len)
+                guard count >= 0, start + count <= bytes.count else { return }
+                let slice = Data(bytes[start..<(start + count)])
+                i = start + count
+                if let text = String(data: slice, encoding: .utf8) {
+                    if isGoogleAccessToken(text) {
+                        if accessToken == nil { accessToken = text }
+                    } else if isGoogleRefreshToken(text) {
+                        if refreshToken == nil { refreshToken = text }
+                    } else if email == nil && isLikelyEmail(text) {
+                        email = text
+                    } else if text.count >= 16, looksLikeBase64(text), let nested = decodeBase64Flexible(text) {
+                        walkProtobuf(nested, depth: depth + 1, accessToken: &accessToken, refreshToken: &refreshToken, email: &email)
+                        scanASCIITokens(in: nested, accessToken: &accessToken, refreshToken: &refreshToken, email: &email)
+                    }
+                }
+                if count >= 4 {
+                    walkProtobuf(slice, depth: depth + 1, accessToken: &accessToken, refreshToken: &refreshToken, email: &email)
+                }
+            case 5: // 32-bit
+                guard i + 4 <= bytes.count else { return }
+                i += 4
+            default:
+                return
+            }
+        }
+    }
+
+    private static func readVarint(_ bytes: [UInt8], from start: Int) -> (UInt64, Int)? {
+        var result: UInt64 = 0
+        var shift: UInt64 = 0
+        var idx = start
+        while idx < bytes.count && shift < 64 {
+            let b = bytes[idx]
+            result |= UInt64(b & 0x7F) << shift
+            idx += 1
+            if (b & 0x80) == 0 {
+                return (result, idx)
+            }
+            shift += 7
+        }
+        return nil
+    }
+
+    private static func scanASCIITokens(
+        in data: Data,
+        accessToken: inout String?,
+        refreshToken: inout String?,
+        email: inout String?
+    ) {
+        // Extract printable token-like ASCII runs as a safe fallback for non-standard framing.
+        var current: [UInt8] = []
+        func flush() {
+            guard current.count >= 12, let s = String(bytes: current, encoding: .utf8) else {
+                current.removeAll(keepingCapacity: true)
+                return
+            }
+            if accessToken == nil, let range = s.range(of: "ya29.") {
+                let candidate = String(s[range.lowerBound...])
+                if isGoogleAccessToken(candidate) { accessToken = candidate }
+            }
+            if refreshToken == nil, let range = s.range(of: "1//") {
+                let candidate = String(s[range.lowerBound...])
+                if isGoogleRefreshToken(candidate) { refreshToken = candidate }
+            }
+            if email == nil && isLikelyEmail(s) {
+                email = s
+            }
+            current.removeAll(keepingCapacity: true)
+        }
+        for b in data {
+            let isTokenChar = (b >= 0x30 && b <= 0x39) // 0-9
+                || (b >= 0x41 && b <= 0x5A) // A-Z
+                || (b >= 0x61 && b <= 0x7A) // a-z
+                || b == 0x2D || b == 0x2E || b == 0x5F || b == 0x2F || b == 0x40 || b == 0x2B // - . _ / @ +
+            if isTokenChar {
+                current.append(b)
+            } else {
+                flush()
+            }
+        }
+        flush()
+    }
+
+    private static func decodeBase64Flexible(_ raw: String) -> Data? {
+        var s = raw
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = s.count % 4
+        if rem != 0 { s += String(repeating: "=", count: 4 - rem) }
+        return Data(base64Encoded: s, options: .ignoreUnknownCharacters)
+    }
+
+    private static func looksLikeBase64(_ s: String) -> Bool {
+        s.allSatisfy { ch in
+            ch.isASCII && (ch.isLetter || ch.isNumber || ch == "+" || ch == "/" || ch == "=" || ch == "-" || ch == "_")
+        }
+    }
+
+    private static func isGoogleAccessToken(_ s: String) -> Bool {
+        s.hasPrefix("ya29.") && s.count >= 20 && !s.contains(where: \.isWhitespace)
+    }
+
+    private static func isGoogleRefreshToken(_ s: String) -> Bool {
+        s.hasPrefix("1//") && s.count >= 20 && !s.contains(where: \.isWhitespace)
+    }
+
+    private static func isLikelyEmail(_ s: String) -> Bool {
+        guard s.count >= 5, s.count <= 128, !s.contains(where: \.isWhitespace) else { return false }
+        let parts = s.split(separator: "@", omittingEmptySubsequences: false)
+        return parts.count == 2 && !parts[0].isEmpty && parts[1].contains(".")
+    }
+}
+
+public struct SQLiteAntigravityStateReader: AntigravityStateReading {
+    public let dbPaths: [String]
+
+    public init(
+        dbPaths: [String] = [
+            "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
+            "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
+            "~/.config/Antigravity/User/globalStorage/state.vscdb",
+            "~/.config/Antigravity IDE/User/globalStorage/state.vscdb",
+        ]
+    ) {
+        self.dbPaths = dbPaths
+    }
+
+    public func readLocalState() -> AntigravityLocalState? {
+        #if canImport(SQLite3)
+        for rawPath in dbPaths {
+            let path = (rawPath as NSString).expandingTildeInPath
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            if let state = readSQLite(at: path) {
+                return state
+            }
+        }
+        #endif
+        return nil
+    }
+
+    #if canImport(SQLite3)
+    private func readSQLite(at path: String) -> AntigravityLocalState? {
+        var db: OpaquePointer?
+        let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil)
+        guard rc == SQLITE_OK, let db else {
+            if let db { sqlite3_close(db) }
+            return nil
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 1000)
+
+        let authStatus = queryValue(db: db, key: "antigravityAuthStatus")
+        let candidateKeys = [
+            "antigravityUnifiedStateSync.oauthToken",
+            "jetskiStateSync.agentManagerInitState",
+        ]
+        var encodedValues = candidateKeys.compactMap { queryValue(db: db, key: $0) }
+        if encodedValues.isEmpty {
+            encodedValues = queryValuesLike(db: db, pattern: "%oauthToken%")
+        }
+        return AntigravityStateParser.parse(authStatusJSON: authStatus, oauthStateValues: encodedValues)
+    }
+
+    private func queryValue(db: OpaquePointer, key: String) -> String? {
+        let sql = "SELECT value FROM ItemTable WHERE key = ? LIMIT 1"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, transient)
+        guard sqlite3_step(stmt) == SQLITE_ROW, let cStr = sqlite3_column_text(stmt, 0) else { return nil }
+        let value = String(cString: cStr).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private func queryValuesLike(db: OpaquePointer, pattern: String) -> [String] {
+        let sql = "SELECT value FROM ItemTable WHERE key LIKE ? LIMIT 5"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, (pattern as NSString).utf8String, -1, transient)
+        var results: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cStr = sqlite3_column_text(stmt, 0) {
+                let value = String(cString: cStr).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { results.append(value) }
+            }
+        }
+        return results
+    }
+    #endif
 }

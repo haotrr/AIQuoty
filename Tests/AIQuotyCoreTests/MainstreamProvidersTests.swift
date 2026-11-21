@@ -413,4 +413,100 @@ final class MainstreamProvidersTests: XCTestCase {
         XCTAssertEqual(decoded.menuBarAccountIDs, [])
         XCTAssertEqual(decoded.menuBarIconOnly, false)
     }
+
+    func testAntigravityLocalStateParserAndProvider() async throws {
+        // Build a nested Base64-encoded protobuf containing a Google access token & refresh token.
+        func pbString(field: UInt8, _ value: String) -> Data {
+            let utf8 = Data(value.utf8)
+            var out = Data([field << 3 | 2])
+            var len = utf8.count
+            while len >= 0x80 {
+                out.append(UInt8((len & 0x7F) | 0x80))
+                len >>= 7
+            }
+            out.append(UInt8(len))
+            out.append(utf8)
+            return out
+        }
+
+        let access = "ya29.a0AfH6SMB_test_antigravity_access_token_123456"
+        let refresh = "1//0g_test_antigravity_refresh_token_abcdef"
+        var inner = Data()
+        inner.append(pbString(field: 1, access))
+        inner.append(pbString(field: 3, refresh))
+        let outer = pbString(field: 1, inner.base64EncodedString())
+        let encoded = outer.base64EncodedString()
+
+        let authStatus = #"{"email":"dev@example.com","name":"Dev"}"#
+        let parsed = AntigravityStateParser.parse(authStatusJSON: authStatus, oauthStateValues: [encoded])
+        XCTAssertEqual(parsed?.accessToken, access)
+        XCTAssertEqual(parsed?.refreshToken, refresh)
+        XCTAssertEqual(parsed?.email, "dev@example.com")
+
+        // Also works with plain JSON apiKey in antigravityAuthStatus.
+        let jsonOnly = #"{"email":"plain@example.com","apiKey":"ya29.a0AfH6SMB_plain_json_token_987654"}"#
+        let parsedJSON = AntigravityStateParser.parse(authStatusJSON: jsonOnly, oauthStateValues: [])
+        XCTAssertEqual(parsedJSON?.accessToken, "ya29.a0AfH6SMB_plain_json_token_987654")
+        XCTAssertEqual(parsedJSON?.email, "plain@example.com")
+
+        // Provider uses local desktop state without requiring any OAuth Client ID/Secret.
+        struct StubAntigravityReader: AntigravityStateReading {
+            let state: AntigravityLocalState?
+            func readLocalState() -> AntigravityLocalState? { state }
+        }
+        let provider = AntigravityProvider(
+            credentials: InMemoryCredentialStore(),
+            http: FixtureHTTPClient(),
+            fileSystem: MemoryFileSystem(),
+            stateReader: StubAntigravityReader(state: parsed)
+        )
+        let accounts = await provider.configuredAccounts()
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(accounts.first?.id, "antigravity.desktop")
+        XCTAssertEqual(accounts.first?.email, "dev@example.com")
+    }
+
+    func testGoogleOAuthConfigResolvesFromLocalConfigFile() throws {
+        let json = """
+        {
+          "antigravity": {
+            "client_id": "file-agy-id.apps.googleusercontent.com",
+            "client_secret": "file-agy-secret"
+          },
+          "gemini": {
+            "clientId": "file-gem-id.apps.googleusercontent.com",
+            "clientSecret": "file-gem-secret"
+          }
+        }
+        """
+        let fs = MemoryFileSystem(files: ["~/.aiquoty/oauth.json": Data(json.utf8)])
+
+        // Falls back to ~/.aiquoty/oauth.json when Keychain and env are empty.
+        let agy = GoogleOAuthAppConfig.antigravity.resolved(
+            credentials: InMemoryCredentialStore(),
+            environment: [:],
+            fileSystem: fs
+        )
+        XCTAssertEqual(agy.clientID, "file-agy-id.apps.googleusercontent.com")
+        XCTAssertEqual(agy.clientSecret, "file-agy-secret")
+
+        let gem = GoogleOAuthAppConfig.gemini.resolved(
+            credentials: InMemoryCredentialStore(),
+            environment: [:],
+            fileSystem: fs
+        )
+        XCTAssertEqual(gem.clientID, "file-gem-id.apps.googleusercontent.com")
+        XCTAssertEqual(gem.clientSecret, "file-gem-secret")
+
+        // Keychain takes precedence over env and file.
+        let creds = InMemoryCredentialStore()
+        try creds.setSecret("keychain-agy-id", account: CredentialAccount.antigravityOAuthClientID)
+        let overridden = GoogleOAuthAppConfig.antigravity.resolved(
+            credentials: creds,
+            environment: ["AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID": "env-agy-id"],
+            fileSystem: fs
+        )
+        XCTAssertEqual(overridden.clientID, "keychain-agy-id")
+        XCTAssertEqual(overridden.clientSecret, "file-agy-secret")
+    }
 }

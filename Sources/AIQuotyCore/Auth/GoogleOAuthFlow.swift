@@ -52,18 +52,32 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         !clientID.isEmpty
     }
 
-    /// Resolves user-supplied OAuth Client ID and Client Secret from Keychain or environment variables.
+    /// Default local config file paths checked for user-supplied OAuth client config.
+    public static let defaultConfigPaths: [String] = [
+        "~/.aiquoty/oauth.json",
+        "~/.aiquoty/config.json",
+    ]
+
+    /// Resolves user-supplied OAuth Client ID and Client Secret from:
+    /// 1. Keychain  2. Environment variables  3. `~/.aiquoty/oauth.json` (or `~/.aiquoty/config.json`).
     /// No OAuth client credentials are hardcoded in source control.
     public func resolved(
         credentials: CredentialStore,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileSystem: FileSystemReading = LocalFileSystem(),
+        configPaths: [String] = GoogleOAuthAppConfig.defaultConfigPaths
     ) -> GoogleOAuthAppConfig {
         var copy = self
+        let fileEntry = (copy.clientID.isEmpty || copy.clientSecret.isEmpty)
+            ? Self.loadFromConfigFiles(providerID: id, fileSystem: fileSystem, paths: configPaths)
+            : nil
         if copy.clientID.isEmpty {
             if let savedID = try? credentials.getSecret(account: clientIDAccount), !savedID.isEmpty {
                 copy.clientID = savedID
             } else if let envID = environment[envClientIDKey], !envID.isEmpty {
                 copy.clientID = envID
+            } else if let fileID = fileEntry?.clientID, !fileID.isEmpty {
+                copy.clientID = fileID
             }
         }
         if copy.clientSecret.isEmpty {
@@ -71,9 +85,52 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
                 copy.clientSecret = savedSecret
             } else if let envSecret = environment[envClientSecretKey], !envSecret.isEmpty {
                 copy.clientSecret = envSecret
+            } else if let fileSecret = fileEntry?.clientSecret, !fileSecret.isEmpty {
+                copy.clientSecret = fileSecret
             }
         }
         return copy
+    }
+
+    private struct FileOAuthEntry {
+        var clientID: String?
+        var clientSecret: String?
+    }
+
+    /// Parses `~/.aiquoty/oauth.json` (or `config.json`) supporting:
+    /// `{ "antigravity": { "client_id": "...", "client_secret": "..." } }`
+    /// or `{ "oauth": { "antigravity": { ... } } }` (both snake_case and camelCase).
+    private static func loadFromConfigFiles(
+        providerID: String,
+        fileSystem: FileSystemReading,
+        paths: [String]
+    ) -> FileOAuthEntry? {
+        for path in paths {
+            guard fileSystem.fileExists(at: path),
+                  let data = try? fileSystem.readData(at: path),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            let section = (root[providerID] as? [String: Any])
+                ?? ((root["oauth"] as? [String: Any])?[providerID] as? [String: Any])
+            guard let section else { continue }
+            let cid = firstNonEmpty(section, keys: ["client_id", "clientId", "clientID"])
+            let csec = firstNonEmpty(section, keys: ["client_secret", "clientSecret"])
+            if cid != nil || csec != nil {
+                return FileOAuthEntry(clientID: cid, clientSecret: csec)
+            }
+        }
+        return nil
+    }
+
+    private static func firstNonEmpty(_ dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = dict[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
     }
 
     public static let gemini = GoogleOAuthAppConfig(

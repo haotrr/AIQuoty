@@ -158,6 +158,7 @@ struct PopoverRootView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            menuBarPickerMenu
             Button {
                 Task { await model.refresh(force: true) }
             } label: {
@@ -179,6 +180,55 @@ struct PopoverRootView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private var menuBarPickerMenu: some View {
+        let isAuto = !model.preferences.menuBarIconOnly && model.preferences.menuBarAccountIDs.isEmpty
+        let customCount = model.preferences.menuBarIconOnly ? 0 : model.preferences.menuBarAccountIDs.count
+
+        return Menu {
+            Section("菜单栏展示") {
+                if model.state.snapshots.isEmpty {
+                    Text("暂无已连接账号")
+                } else {
+                    ForEach(model.state.snapshots) { snap in
+                        Toggle(isOn: Binding(
+                            get: { model.isShownInMenuBar(snap.account.id) },
+                            set: { _ in model.toggleMenuBarAccount(snap.account.id) }
+                        )) {
+                            Text("\(snap.account.displayName) · \(MenuBarFormatter.itemText(for: snap))")
+                        }
+                    }
+                }
+            }
+            Divider()
+            Toggle("自动（跟随置顶）", isOn: Binding(
+                get: { isAuto },
+                set: { if $0 { model.resetMenuBarToAuto() } }
+            ))
+            Button("全部选择") { model.selectAllMenuBarAccounts() }
+                .disabled(model.state.snapshots.isEmpty)
+            Toggle("仅显示图标", isOn: Binding(
+                get: { model.preferences.menuBarIconOnly },
+                set: { model.setMenuBarIconOnly($0) }
+            ))
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "menubar.rectangle")
+                if customCount > 0 {
+                    Text("\(customCount)")
+                        .font(.caption.monospacedDigit())
+                }
+            }
+            .foregroundStyle(customCount > 0 ? Color.accentColor : Color.primary)
+            .frame(minWidth: 22, minHeight: 22)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("选择菜单栏展示的 Agent 信息")
+        .accessibilityLabel("选择菜单栏展示的 Agent")
     }
 
     private var emptyState: some View {

@@ -19,6 +19,7 @@ struct SettingsRootView: View {
             AboutSettingsTab()
                 .tabItem { Label("关于", systemImage: "info.circle") }
         }
+        .frame(width: 780, height: 580)
         .preferredColorScheme(model.preferredColorScheme)
         .onAppear {
             AppWindowActivator.activateWindow(identifierHint: "Settings")
@@ -134,7 +135,7 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 580, height: 600)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private static func intervalLabel(_ seconds: TimeInterval) -> String {
@@ -224,28 +225,33 @@ private enum ProviderCatalog {
         ),
         ProviderConnectionSpec(
             id: "antigravity", title: "Antigravity", group: .agents,
-            summary: "Google Antigravity 模型配额。",
+            summary: "默认自动复用本机 Antigravity 桌面端登录态，无需填写 Key。",
             oauth: .google(.antigravity, bundleAccount: CredentialAccount.antigravityOAuthBundle),
-            oauthNote: GoogleOAuthAppConfig.antigravity.riskNotice ?? "通过 Google OAuth 登录并自动续期。",
+            oauthNote: "已登录本机 Antigravity 桌面端时会自动读取，无需使用下方 OAuth。如需独立授权，请先填写 OAuth Client ID / Secret。",
             secrets: [
                 SecretFieldSpec(
-                    label: "OAuth Client ID",
+                    label: "OAuth Client ID（可选）",
                     placeholder: "Google OAuth Client ID",
-                    hint: "用于一键浏览器登录与自动续期。也可通过环境变量 AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID 提供。",
+                    hint: "仅在使用应用内一键登录时需要；已登录 Antigravity 桌面端时无需填写。",
                     account: CredentialAccount.antigravityOAuthClientID
                 ),
                 SecretFieldSpec(
-                    label: "OAuth Client Secret",
+                    label: "OAuth Client Secret（可选）",
                     placeholder: "Google OAuth Client Secret",
                     hint: "配合 Client ID 使用。也可通过环境变量 AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET 提供。",
                     account: CredentialAccount.antigravityOAuthClientSecret
                 ),
                 SecretFieldSpec(
-                    label: "Access Token（手动）",
+                    label: "Access Token（手动覆盖）",
                     placeholder: "Google Cloud Code OAuth Access Token",
-                    hint: "不配置 OAuth Client 时，也可以直接粘贴 Access Token。",
+                    hint: "留空时自动读取本机 Antigravity state.vscdb。",
                     account: CredentialAccount.antigravityOAuthToken
                 ),
+            ],
+            detectPaths: [
+                "~/.aiquoty/oauth.json",
+                "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
+                "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
             ]
         ),
         ProviderConnectionSpec(
@@ -459,7 +465,7 @@ private struct ConnectionsSettingsTab: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 800, height: 600)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: reloadSavedFlags)
         .onChange(of: model.activeSignIn) { _, _ in reloadSavedFlags() }
     }
@@ -675,14 +681,26 @@ private struct ProviderDetailView: View {
             }
 
             if !spec.secrets.isEmpty {
-                Section {
-                    ForEach(spec.secrets) { secretRow($0) }
-                } header: {
-                    Text("手动填写")
-                } footer: {
-                    Text("仅保存在本机钥匙串。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if spec.oauth != nil {
+                    Section {
+                        DisclosureGroup("高级选项（自定义 OAuth / 手动 Token）") {
+                            ForEach(spec.secrets) { secretRow($0) }
+                        }
+                    } footer: {
+                        Text("仅保存在本机钥匙串；也可在 ~/.aiquoty/oauth.json 中配置。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section {
+                        ForEach(spec.secrets) { secretRow($0) }
+                    } header: {
+                        Text("手动填写")
+                    } footer: {
+                        Text("仅保存在本机钥匙串。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -836,7 +854,7 @@ private struct CoverageSettingsTab: View {
             }
             .padding(.vertical, 4)
         }
-        .frame(width: 580, height: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func statusLabel(_ s: ProviderDescriptor.ImplementationStatus) -> String {
@@ -880,18 +898,20 @@ private struct AboutSettingsTab: View {
             Text("本机优先的 AI Agent 配额监视器。无云账号、无遥测、无需注册。")
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 460)
             Text("灵感来自 AI Stats 与 CUStats；实现与界面为原创。部分数据路径参考了 MIT 许可的 CodexBar 文档（见 THIRD_PARTY.md）。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 460)
             Spacer()
             Text("需要 macOS 14 或更高版本")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
         .padding(24)
-        .frame(width: 580, height: 380)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

@@ -350,7 +350,7 @@ final class AppModel: ObservableObject {
         cancelSignIn()
         let resolvedApp = app.resolved(credentials: KeychainCredentialStore())
         guard resolvedApp.isConfigured else {
-            signInNotice = "请先在「设置 → 连接」中填写 \(app.displayName) 的 OAuth Client ID（可选 Secret，仅存本机钥匙串），或设置环境变量 \(app.envClientIDKey)。"
+            signInNotice = "请先在「设置 → 连接」填写 \(app.displayName) 的 OAuth Client ID，或在 ~/.aiquoty/oauth.json / 环境变量 \(app.envClientIDKey) 中配置。"
             return
         }
         activeSignIn = .googleBrowser(providerName: resolvedApp.displayName)
@@ -454,7 +454,7 @@ final class AppModel: ObservableObject {
             ClaudeOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.claudeUsageJSON),
             CodexOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.codexUsageJSON),
             CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, cursorStateReader: NullCursorStateReader(), externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.cursorUsageJSON),
-            AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.antigravityQuotaJSON),
+            AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, stateReader: NullAntigravityStateReader(), demoFixture: DemoFixtures.antigravityQuotaJSON),
             GeminiCLIProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.geminiQuotaJSON),
             OpenCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.openCodeUsageJSON),
             DeepSeekProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.deepSeekBalanceJSON),
