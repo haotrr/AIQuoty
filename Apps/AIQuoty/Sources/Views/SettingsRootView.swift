@@ -112,6 +112,47 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
+                if model.state.snapshots.isEmpty {
+                    Text("连接服务后，可在这里选择要在主页显示的账号。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.state.snapshots) { snap in
+                        Toggle(isOn: Binding(
+                            get: { model.isShownOnHome(snap.account.id) },
+                            set: { model.setShownOnHome(snap.account.id, shown: $0) }
+                        )) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(snap.account.displayName)
+                                    let subtitle = [snap.account.planLabel, snap.account.email].compactMap { $0 }
+                                    if !subtitle.isEmpty {
+                                        Text(subtitle.joined(separator: " · "))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(MenuBarFormatter.itemText(for: snap))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("全部显示") { model.showAllHomeAccounts() }
+                            .disabled(model.state.snapshots.allSatisfy { model.isShownOnHome($0.account.id) })
+                        Button("全部隐藏") { model.hideAllHomeAccounts() }
+                            .disabled(model.state.snapshots.allSatisfy { !model.isShownOnHome($0.account.id) })
+                    }
+                }
+            } header: {
+                Text("主页显示")
+            } footer: {
+                SectionFooter("选择在主页（菜单栏弹窗）中展示的已连接账号，不影响后台刷新、菜单栏展示与仪表盘。")
+            }
+
+            Section {
                 Toggle("Claude Code（~/.claude/projects）", isOn: $model.preferences.enableLocalClaudeLogs)
                 Toggle("Codex（~/.codex/sessions）", isOn: $model.preferences.enableLocalCodexLogs)
                 Toggle("OpenCode（~/.local/share/opencode/storage）", isOn: $model.preferences.enableLocalOpenCodeLogs)
@@ -844,25 +885,29 @@ private struct CoverageSettingsTab: View {
 
     var body: some View {
         List(ProviderRegistry.allDescriptors) { d in
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(d.displayName).font(.headline)
+                    Text(d.displayName).font(.callout.weight(.semibold))
                     if model.detectedAgents.contains(where: { $0.providerID == d.id }) {
                         StatusBadge(text: "本机已检测", tint: Palette.spend)
+                    }
+                    let kinds = d.supportedMetricKinds.map(\.displayLabel)
+                    if !kinds.isEmpty {
+                        Text(kinds.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
                     Spacer()
                     StatusBadge(text: statusLabel(d.implementationStatus), tint: statusColor(d.implementationStatus))
                 }
                 Text(d.notes)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                let kinds = d.supportedMetricKinds.map(\.displayLabel)
-                Text("指标：\(kinds.isEmpty ? "无" : kinds.joined(separator: "、"))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -896,9 +941,10 @@ private struct AboutSettingsTab: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "gauge.with.dots.needle.33percent")
-                .font(.system(size: 48, weight: .light))
-                .foregroundStyle(Color.accentColor)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 72, height: 72)
                 .padding(.top, 8)
             Text("AIQuoty")
                 .font(.title.weight(.semibold))
@@ -930,57 +976,54 @@ private struct AboutSettingsTab: View {
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openSettings) private var openSettings
+    @State private var filter: SnapshotFilter = .all
+    @State private var query: String = ""
 
-    private var unconfiguredDetected: [DetectedLocalAgent] {
-        let activeIDs = Set(model.state.snapshots.map(\.account.providerID))
-        return model.detectedAgents.filter { !activeIDs.contains($0.providerID) }
-    }
+    private let gridColumns = [
+        GridItem(.adaptive(minimum: 270, maximum: 380), spacing: 8, alignment: .top),
+    ]
 
     var body: some View {
-        List {
-            if model.activeSignIn != .idle || !model.signInNotice.isEmpty {
-                Section("登录进度") {
-                    SignInProgressBanner()
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                }
-            }
+        VStack(alignment: .leading, spacing: 0) {
             if !model.state.snapshots.isEmpty {
-                Section("已连接服务") {
-                    ForEach(model.state.snapshots) { snap in
-                        AccountCard(
-                            snapshot: snap,
-                            inMenuBar: model.isShownInMenuBar(snap.account.id),
-                            onToggleMenuBar: { model.toggleMenuBarAccount(snap.account.id) },
-                            onPin: { model.togglePin(snap.account.id) },
-                            reauthTitle: model.signInActionTitle(for: snap.account.providerID),
-                            onReauth: { model.startOneClickSignIn(providerID: snap.account.providerID) },
-                            onRetry: { Task { await model.refresh(force: true) } },
-                            onOpenSettings: openSettingsAndActivate,
-                            alwaysExpanded: true
-                        )
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                        .listRowSeparator(.hidden)
-                    }
-                }
+                dashboardHeader
+                Divider()
             }
-            if !model.preferences.demoMode && !unconfiguredDetected.isEmpty {
-                Section("本机已检测到（待连接）") {
-                    ForEach(unconfiguredDetected) { agent in
-                        DetectedAgentCard(
-                            agent: agent,
-                            oneClickTitle: model.signInActionTitle(for: agent.providerID),
-                            onOneClick: { model.startOneClickSignIn(providerID: agent.providerID) },
-                            onConfigure: openSettingsAndActivate
-                        )
-                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                        .listRowSeparator(.hidden)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if model.activeSignIn != .idle || !model.signInNotice.isEmpty {
+                        SignInProgressBanner()
+                    }
+                    if !filteredSnapshots.isEmpty {
+                        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
+                            ForEach(filteredSnapshots) { snap in
+                                AccountCard(
+                                    snapshot: snap,
+                                    inMenuBar: model.isShownInMenuBar(snap.account.id),
+                                    onToggleMenuBar: { model.toggleMenuBarAccount(snap.account.id) },
+                                    onPin: { model.togglePin(snap.account.id) },
+                                    reauthTitle: model.signInActionTitle(for: snap.account.providerID),
+                                    onReauth: { model.startOneClickSignIn(providerID: snap.account.providerID) },
+                                    onRetry: { Task { await model.refresh(force: true) } },
+                                    onOpenSettings: openSettingsAndActivate,
+                                    alwaysExpanded: true
+                                )
+                                .frame(maxHeight: .infinity, alignment: .top)
+                            }
+                        }
+                    } else if !model.state.snapshots.isEmpty {
+                        Text("当前筛选条件下没有匹配的服务")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
                     }
                 }
+                .padding(12)
             }
         }
-        .listStyle(.inset)
         .overlay {
-            if model.state.snapshots.isEmpty && unconfiguredDetected.isEmpty && model.activeSignIn == .idle {
+            if model.state.snapshots.isEmpty && model.activeSignIn == .idle {
                 ContentUnavailableView {
                     Label("尚未连接任何服务", systemImage: "gauge.with.dots.needle.33percent")
                 } description: {
@@ -1018,6 +1061,83 @@ struct DashboardView: View {
         }
     }
 
+    private var dashboardHeader: some View {
+        let all = model.state.snapshots
+        let connectedCount = all.filter { $0.connection == .connected }.count
+        let quotaWindows = all.flatMap { snap in snap.windows.map { (snap.account.displayName, $0) } }
+        let peak = quotaWindows.max { ($0.1.usedFraction ?? -1) < ($1.1.usedFraction ?? -1) }
+        let alertCount = quotaWindows.filter { ($0.1.usedFraction ?? 0) >= 0.80 }.count
+        let spendCount = all.filter { !$0.spendMetrics.isEmpty }.count
+        let localCount = all.filter { !$0.localTokenMetrics.isEmpty }.count
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                DashboardKPITile(
+                    title: "已连接",
+                    value: "\(connectedCount)/\(all.count)",
+                    detail: "服务",
+                    tint: connectedCount == all.count ? Palette.good : Palette.warn
+                )
+                DashboardKPITile(
+                    title: "峰值占用",
+                    value: peak.flatMap { $0.1.usedFraction }.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
+                    detail: peak?.0 ?? "暂无配额窗口",
+                    tint: peak.flatMap { $0.1.usedFraction }.map { Palette.usageColor(usedFraction: $0) } ?? .secondary
+                )
+                DashboardKPITile(
+                    title: "高占用预警",
+                    value: "\(alertCount)",
+                    detail: alertCount > 0 ? "窗口 ≥ 80%" : "全部充裕",
+                    tint: alertCount > 0 ? Palette.warn : Palette.good
+                )
+                DashboardKPITile(
+                    title: "数据源分布",
+                    value: "\(quotaWindows.count) 窗口",
+                    detail: "\(spendCount) API · \(localCount) 日志",
+                    tint: Palette.spend
+                )
+            }
+
+            HStack(spacing: 8) {
+                Picker("分类", selection: $filter) {
+                    ForEach(SnapshotFilter.allCases) { item in
+                        Text(item.rawValue).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 260)
+
+                Spacer(minLength: 8)
+
+                SearchField(text: $query)
+                    .frame(maxWidth: 220)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var filteredSnapshots: [AccountSnapshot] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let base = model.state.snapshots
+            .filter { filter.matches($0) }
+            .sorted { lhs, rhs in
+                if lhs.account.pinned != rhs.account.pinned { return lhs.account.pinned && !rhs.account.pinned }
+                let lu = lhs.windows.compactMap(\.usedFraction).max() ?? -1
+                let ru = rhs.windows.compactMap(\.usedFraction).max() ?? -1
+                if lu != ru { return lu > ru }
+                return lhs.account.displayName.localizedStandardCompare(rhs.account.displayName) == .orderedAscending
+            }
+        guard !q.isEmpty else { return base }
+        return base.filter {
+            $0.account.displayName.lowercased().contains(q)
+                || ($0.account.email?.lowercased().contains(q) ?? false)
+                || $0.account.providerID.lowercased().contains(q)
+                || ($0.account.group?.lowercased().contains(q) ?? false)
+        }
+    }
+
     private var subtitle: String {
         guard let last = model.state.lastRefreshAt else { return model.preferences.demoMode ? "演示模式" : "" }
         let updated = "更新于 \(last.formatted(date: .omitted, time: .shortened))"
@@ -1027,6 +1147,40 @@ struct DashboardView: View {
     private func openSettingsAndActivate() {
         openSettings()
         AppWindowActivator.activateWindow(identifierHint: "Settings")
+    }
+}
+
+private struct DashboardKPITile: View {
+    let title: String
+    let value: String
+    let detail: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(value)
+                    .font(.headline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(tint)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Palette.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+        )
     }
 }
 

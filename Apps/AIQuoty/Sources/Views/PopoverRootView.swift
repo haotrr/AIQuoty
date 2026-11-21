@@ -5,28 +5,46 @@ import AIQuotyCore
 
 // MARK: - Popover
 
+enum SnapshotFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case quota = "配额"
+    case spend = "API"
+    case local = "日志"
+
+    var id: String { rawValue }
+
+    func matches(_ snap: AccountSnapshot) -> Bool {
+        switch self {
+        case .all: return true
+        case .quota: return !snap.windows.isEmpty
+        case .spend: return !snap.spendMetrics.isEmpty
+        case .local: return !snap.localTokenMetrics.isEmpty
+        }
+    }
+}
+
 struct PopoverRootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var contentHeight: CGFloat = 0
+    @State private var filter: SnapshotFilter = .all
 
     /// Search is only useful once the list gets long; below this it's noise.
     private static let searchThreshold = 5
-    private static let maxScrollHeight: CGFloat = 520
+    private static let maxScrollHeight: CGFloat = 600
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if showsSearch {
-                SearchField(text: $model.searchText)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+            if showsFilterBar || showsSearch {
+                filterAndSearchBar
             }
             Divider()
             ScrollView {
                 content
-                    .padding(12)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
                     .background(
                         GeometryReader { geo in
                             Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
@@ -38,7 +56,7 @@ struct PopoverRootView: View {
             Divider()
             footer
         }
-        .frame(width: 360)
+        .frame(width: 396)
         .preferredColorScheme(model.preferredColorScheme)
         .background(hiddenShortcuts)
     }
@@ -47,19 +65,19 @@ struct PopoverRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             if model.activeSignIn != .idle || !model.signInNotice.isEmpty {
                 SignInProgressBanner()
             }
-            if visibleSnapshots.isEmpty && visibleDetectedAgents.isEmpty {
-                if model.searchText.isEmpty {
+            if visibleSnapshots.isEmpty {
+                if model.searchText.isEmpty && filter == .all {
                     emptyState
                 } else {
-                    Text("没有匹配“\(model.searchText)”的账号")
-                        .font(.callout)
+                    Text(model.searchText.isEmpty ? "当前分类下暂无账号" : "没有匹配“\(model.searchText)”的账号")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
+                        .padding(.vertical, 20)
                 }
             } else {
                 ForEach(groupedKeys, id: \.self) { group in
@@ -71,6 +89,7 @@ struct PopoverRootView: View {
                             snapshot: snap,
                             inMenuBar: model.isShownInMenuBar(snap.account.id),
                             onToggleMenuBar: { model.toggleMenuBarAccount(snap.account.id) },
+                            onHideFromHome: { model.setShownOnHome(snap.account.id, shown: false) },
                             onPin: { model.togglePin(snap.account.id) },
                             reauthTitle: model.signInActionTitle(for: snap.account.providerID),
                             onReauth: { model.startOneClickSignIn(providerID: snap.account.providerID) },
@@ -79,52 +98,72 @@ struct PopoverRootView: View {
                         )
                     }
                 }
-
-                if !model.preferences.demoMode && !visibleDetectedAgents.isEmpty {
-                    SectionHeader(title: "本机已检测到（待连接）")
-                        .padding(.top, visibleSnapshots.isEmpty ? 0 : 4)
-                    ForEach(visibleDetectedAgents) { agent in
-                        DetectedAgentCard(
-                            agent: agent,
-                            oneClickTitle: model.signInActionTitle(for: agent.providerID),
-                            onOneClick: { model.startOneClickSignIn(providerID: agent.providerID) },
-                            onConfigure: openSettingsAndActivate
-                        )
-                    }
-                }
             }
         }
     }
 
+    private var availableFilters: [SnapshotFilter] {
+        let base = model.homeSnapshots
+        var result: [SnapshotFilter] = [.all]
+        if base.contains(where: { !$0.windows.isEmpty }) { result.append(.quota) }
+        if base.contains(where: { !$0.spendMetrics.isEmpty }) { result.append(.spend) }
+        if base.contains(where: { !$0.localTokenMetrics.isEmpty }) { result.append(.local) }
+        return result
+    }
+
+    private var showsFilterBar: Bool {
+        availableFilters.count > 2
+    }
+
     private var showsSearch: Bool {
         !model.searchText.isEmpty
-            || model.state.snapshots.count + unconfiguredDetectedAgents.count >= Self.searchThreshold
+            || model.homeSnapshots.count >= Self.searchThreshold
+    }
+
+    private var filterAndSearchBar: some View {
+        HStack(spacing: 6) {
+            if showsFilterBar {
+                HStack(spacing: 2) {
+                    ForEach(availableFilters) { item in
+                        let selected = filter == item
+                        Button {
+                            filter = item
+                        } label: {
+                            Text(item.rawValue)
+                                .font(.caption2.weight(selected ? .semibold : .regular))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    selected ? Color.accentColor.opacity(0.18) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                )
+                                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(2)
+                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            if showsSearch {
+                SearchField(text: $model.searchText)
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
     }
 
     private var visibleSnapshots: [AccountSnapshot] {
         let q = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let base = model.state.snapshots
+        let base = model.homeSnapshots.filter { filter.matches($0) }
         guard !q.isEmpty else { return base }
         return base.filter {
             $0.account.displayName.lowercased().contains(q)
                 || ($0.account.email?.lowercased().contains(q) ?? false)
                 || $0.account.providerID.lowercased().contains(q)
                 || ($0.account.group?.lowercased().contains(q) ?? false)
-        }
-    }
-
-    private var unconfiguredDetectedAgents: [DetectedLocalAgent] {
-        let activeProviderIDs = Set(model.state.snapshots.map(\.account.providerID))
-        return model.detectedAgents.filter { !activeProviderIDs.contains($0.providerID) }
-    }
-
-    private var visibleDetectedAgents: [DetectedLocalAgent] {
-        let q = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return unconfiguredDetectedAgents }
-        return unconfiguredDetectedAgents.filter {
-            $0.displayName.lowercased().contains(q)
-                || $0.providerID.lowercased().contains(q)
-                || $0.category.lowercased().contains(q)
         }
     }
 
@@ -149,27 +188,59 @@ struct PopoverRootView: View {
     // MARK: Header / Footer
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("AIQuoty")
-                    .font(.headline)
-                Text(model.preferences.demoMode ? "演示模式 · 合成数据" : "本机配额一览")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        let total = model.homeSnapshots.count
+        let hotCount = model.homeSnapshots.filter { snap in
+            snap.windows.contains { ($0.usedFraction ?? 0) >= 0.80 }
+        }.count
+        let peakFraction = model.homeSnapshots
+            .flatMap(\.windows)
+            .compactMap(\.usedFraction)
+            .max()
+
+        return HStack(alignment: .center, spacing: 6) {
+            Text("AIQuoty")
+                .font(.subheadline.weight(.semibold))
+            if model.preferences.demoMode {
+                StatusBadge(text: "演示", tint: Palette.spend)
+            } else if total > 0 {
+                HStack(spacing: 4) {
+                    Text("\(total) 项")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    if hotCount > 0 {
+                        StatusBadge(text: "\(hotCount) 预警", tint: Palette.warn)
+                    } else if let peak = peakFraction {
+                        Text("峰值 \(Int((peak * 100).rounded()))%")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(Palette.usageColor(usedFraction: peak))
+                    }
+                }
             }
-            Spacer()
+            Spacer(minLength: 4)
             menuBarPickerMenu
+            Button {
+                openDashboardAndActivate()
+            } label: {
+                Image(systemName: "rectangle.grid.2x2")
+                    .font(.caption)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("打开仪表盘（⌘D）")
+            .accessibilityLabel("打开仪表盘")
             Button {
                 Task { await model.refresh(force: true) }
             } label: {
                 Group {
                     if model.isRefreshing {
-                        ProgressView().controlSize(.small)
+                        ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.clockwise")
+                            .font(.caption)
                     }
                 }
-                .frame(width: 22, height: 22)
+                .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
@@ -178,8 +249,8 @@ struct PopoverRootView: View {
             .keyboardShortcut("r", modifiers: [.command])
             .accessibilityLabel("刷新")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
     }
 
     private var menuBarPickerMenu: some View {
@@ -231,21 +302,43 @@ struct PopoverRootView: View {
         .accessibilityLabel("选择菜单栏展示的 Agent")
     }
 
+    private var hasHiddenItems: Bool {
+        !model.state.snapshots.isEmpty
+    }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "gauge.with.dots.needle.33percent")
+            Image(systemName: hasHiddenItems ? "eye.slash" : "gauge.with.dots.needle.33percent")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(.secondary)
-            Text(model.preferences.demoMode ? "演示数据加载中…" : "尚未连接任何服务")
-                .font(.headline)
-            Text("连接 Claude、Codex、Cursor、Antigravity 等 Agent 后即可在这里查看配额。密钥只保存在钥匙串中。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Button("打开设置…") { openSettingsAndActivate() }
-                .buttonStyle(.borderedProminent)
+            if hasHiddenItems {
+                Text("主页已隐藏所有账号")
+                    .font(.headline)
+                Text("可在「设置 → 通用 → 主页显示」中重新勾选要在主页展示的账号。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("显示全部") {
+                        model.showAllHomeAccounts()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("打开设置…") { openSettingsAndActivate() }
+                }
                 .padding(.top, 2)
+            } else {
+                Text(model.preferences.demoMode ? "演示数据加载中…" : "尚未连接任何服务")
+                    .font(.headline)
+                Text("连接 Claude、Codex、Cursor、Antigravity 等 Agent 后即可在这里查看配额。密钥只保存在钥匙串中。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("打开设置…") { openSettingsAndActivate() }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
@@ -256,12 +349,23 @@ struct PopoverRootView: View {
         HStack(spacing: 6) {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 Text(statusLine(now: context.date))
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
+            Button {
+                openSettingsAndActivate()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.caption)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("设置（⌘,）")
+            .accessibilityLabel("设置")
             Menu {
                 Button("打开仪表盘…") { openDashboardAndActivate() }
                     .keyboardShortcut("d", modifiers: [.command])
@@ -272,7 +376,9 @@ struct PopoverRootView: View {
                     .keyboardShortcut("q", modifiers: [.command])
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .font(.body)
+                    .font(.caption)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -280,8 +386,8 @@ struct PopoverRootView: View {
             .help("更多")
             .accessibilityLabel("更多操作")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     /// Keeps ⌘D / ⌘, / ⌘Q working while the popover is key, even when the menu is closed.
@@ -325,9 +431,10 @@ struct SectionHeader: View {
     let title: String
     var body: some View {
         Text(title)
-            .font(.subheadline.weight(.semibold))
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
-            .padding(.top, 4)
+            .textCase(.uppercase)
+            .padding(.top, 3)
             .padding(.leading, 2)
             .accessibilityAddTraits(.isHeader)
     }
@@ -338,10 +445,11 @@ struct SearchField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Image(systemName: "magnifyingglass")
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-            TextField("筛选账号或服务", text: $text)
+            TextField("筛选", text: $text)
                 .textFieldStyle(.plain)
                 .focused($focused)
             if !text.isEmpty {
@@ -349,6 +457,7 @@ struct SearchField: View {
                     text = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -356,10 +465,10 @@ struct SearchField: View {
                 .accessibilityLabel("清除筛选")
             }
         }
-        .font(.callout)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .font(.caption)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("筛选")
     }
@@ -472,42 +581,58 @@ struct AccountCard: View {
     let snapshot: AccountSnapshot
     var inMenuBar: Bool = false
     var onToggleMenuBar: (() -> Void)? = nil
+    var onHideFromHome: (() -> Void)? = nil
     var onPin: () -> Void
     var reauthTitle: String? = nil
     var onReauth: (() -> Void)? = nil
     var onRetry: (() -> Void)? = nil
     var onOpenSettings: (() -> Void)? = nil
-    /// Dashboard shows every window; the popover collapses to the tightest one.
+    /// Dashboard shows every window; the popover shows up to 2 inline (e.g. 5h + 7d) before collapsing.
     var alwaysExpanded: Bool = false
+
+    private static let collapsedWindowLimit = 2
 
     @State private var isHovering = false
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             headerRow
 
             if !hasMetrics {
                 problemView
             } else {
-                ForEach(displayedWindows) { window in
-                    QuotaBar(window: window)
+                if !displayedWindows.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(displayedWindows) { window in
+                            QuotaBar(window: window)
+                        }
+                    }
                 }
-                if hiddenWindowCount > 0 || (isExpanded && snapshot.windows.count > 1 && !alwaysExpanded) {
+                if hiddenWindowCount > 0 || (isExpanded && snapshot.windows.count > Self.collapsedWindowLimit && !alwaysExpanded) {
                     expandToggle
                 }
-                ForEach(Array(snapshot.spendMetrics.enumerated()), id: \.offset) { _, metric in
-                    MetricRow(metric: metric)
-                }
-                ForEach(Array(snapshot.localTokenMetrics.enumerated()), id: \.offset) { _, metric in
-                    MetricRow(metric: metric)
+                if !snapshot.spendMetrics.isEmpty || !snapshot.localTokenMetrics.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(snapshot.spendMetrics.enumerated()), id: \.offset) { _, metric in
+                            MetricRow(metric: metric)
+                        }
+                        ForEach(Array(snapshot.localTokenMetrics.enumerated()), id: \.offset) { _, metric in
+                            MetricRow(metric: metric)
+                        }
+                    }
                 }
                 freshnessFooter
             }
         }
-        .padding(10)
-        .background(Palette.cardFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(Palette.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(isHovering ? 0.12 : 0.06), lineWidth: 0.5)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { isHovering = $0 }
         .contextMenu { contextMenuItems }
         .accessibilityElement(children: .contain)
@@ -517,30 +642,63 @@ struct AccountCard: View {
         !snapshot.windows.isEmpty || !snapshot.spendMetrics.isEmpty || !snapshot.localTokenMetrics.isEmpty
     }
 
+    private var statusDotColor: Color {
+        switch snapshot.connection {
+        case .error: return Palette.bad
+        case .authRequired, .rateLimited: return Palette.warn
+        case .disconnected, .unsupported, .connecting: return .secondary
+        case .connected:
+            if let maxUsed = snapshot.windows.compactMap(\.usedFraction).max() {
+                return Palette.usageColor(usedFraction: maxUsed)
+            }
+            if !snapshot.spendMetrics.isEmpty { return Palette.spend }
+            if !snapshot.localTokenMetrics.isEmpty { return Palette.local }
+            return Palette.good
+        }
+    }
+
     // MARK: Header
 
     private var headerRow: some View {
-        HStack(alignment: .top, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(snapshot.account.displayName)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    // "Connected" is the normal state — only surface a badge when something is off.
-                    if snapshot.connection != .connected {
-                        ConnectionBadge(state: snapshot.connection)
-                    }
-                }
-                let subtitle = [snapshot.account.planLabel, snapshot.account.email].compactMap { $0 }
-                if !subtitle.isEmpty {
-                    Text(subtitle.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+        HStack(alignment: .center, spacing: 5) {
+            Circle()
+                .fill(statusDotColor)
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+
+            Text(snapshot.account.displayName)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+                .layoutPriority(2)
+
+            if let plan = snapshot.account.planLabel, !plan.isEmpty {
+                Text(plan)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.fill.tertiary, in: Capsule())
+                    .lineLimit(1)
+                    .layoutPriority(1)
             }
-            Spacer(minLength: 4)
+
+            if let email = snapshot.account.email, !email.isEmpty {
+                Text(email)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(email)
+            }
+
+            // "Connected" is the normal state — only surface a badge when something is off.
+            if snapshot.connection != .connected {
+                ConnectionBadge(state: snapshot.connection)
+                    .layoutPriority(2)
+            }
+
+            Spacer(minLength: 2)
+
             HStack(spacing: 0) {
                 if let onToggleMenuBar, isHovering || inMenuBar {
                     CardIconButton(
@@ -569,6 +727,9 @@ struct AccountCard: View {
         if let onToggleMenuBar {
             Button(inMenuBar ? "从菜单栏移除" : "在菜单栏中显示", action: onToggleMenuBar)
         }
+        if let onHideFromHome {
+            Button("从主页隐藏", action: onHideFromHome)
+        }
         if let onRetry {
             Divider()
             Button("刷新", action: onRetry)
@@ -577,7 +738,7 @@ struct AccountCard: View {
 
     // MARK: Windows
 
-    /// Highest-utilisation window first so the tightest limit is what you see collapsed.
+    /// Highest-utilisation window first so the tightest limits are always surfaced first.
     private var sortedWindows: [QuotaWindow] {
         snapshot.windows.enumerated().sorted { a, b in
             let ua = a.element.usedFraction ?? -1
@@ -589,23 +750,24 @@ struct AccountCard: View {
 
     private var displayedWindows: [QuotaWindow] {
         if alwaysExpanded || isExpanded { return snapshot.windows }
-        return Array(sortedWindows.prefix(1))
+        return Array(sortedWindows.prefix(Self.collapsedWindowLimit))
     }
 
     private var hiddenWindowCount: Int {
-        snapshot.windows.count - displayedWindows.count
+        max(0, snapshot.windows.count - displayedWindows.count)
     }
 
     private var expandToggle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            withAnimation(.easeInOut(duration: 0.16)) { isExpanded.toggle() }
         } label: {
-            HStack(spacing: 4) {
-                Text(isExpanded ? "收起" : "显示全部 \(snapshot.windows.count) 个配额窗口")
+            HStack(spacing: 3) {
+                Text(isExpanded ? "收起多余窗口" : "展开其余 \(hiddenWindowCount) 个窗口（共 \(snapshot.windows.count)）")
                 Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
             }
-            .font(.caption)
+            .font(.caption2)
             .foregroundStyle(.secondary)
             .contentShape(Rectangle())
         }
@@ -718,9 +880,9 @@ struct CardIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.callout)
+                .font(.caption)
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: 18, height: 18)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -736,42 +898,77 @@ struct QuotaBar: View {
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Text(window.title)
-                    .font(.callout)
-                Spacer()
-                if let symbol = severitySymbol {
-                    Image(systemName: symbol)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let resetLabel = compactResetText(now: context.date)
+            let pace = elapsedFraction(now: context.date)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(window.title)
                         .font(.caption)
-                        .foregroundStyle(usageTint)
-                        .accessibilityHidden(true)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Spacer(minLength: 4)
+
+                    if let resetLabel {
+                        Text(resetLabel)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+
+                    if let symbol = severitySymbol {
+                        Image(systemName: symbol)
+                            .font(.caption2)
+                            .foregroundStyle(usageTint)
+                            .accessibilityHidden(true)
+                    }
+
+                    Text(valueText)
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(window.freshness == .stale ? Color.secondary : valueTint)
+                        .lineLimit(1)
                 }
-                Text(valueText)
-                    .font(.callout.monospacedDigit().weight(.medium))
-                    .foregroundStyle(window.freshness == .stale ? .secondary : .primary)
+
+                slimProgressBar(paceFraction: pace)
             }
-            if let used = window.usedFraction {
-                ProgressView(value: min(max(used, 0), 1))
-                    .progressViewStyle(.linear)
-                    .tint(usageTint)
-                    .animation(.easeInOut(duration: 0.35), value: used)
-            } else {
-                Capsule()
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .foregroundStyle(.tertiary)
-                    .frame(height: 5)
-            }
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                Text(resetText(now: context.date))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .help(tooltipText(now: context.date))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(window.title)
+            .accessibilityValue("已用 \(valueText)，\(fullResetText(now: context.date))")
         }
-        .help("来源：\(window.source.label)")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(window.title)
-        .accessibilityValue("已用 \(valueText)，\(resetText(now: Date()))")
+    }
+
+    @ViewBuilder
+    private func slimProgressBar(paceFraction: Double?) -> some View {
+        if let used = window.usedFraction {
+            let clamped = min(max(used, 0), 1)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.09))
+                    Capsule()
+                        .fill(usageTint)
+                        .frame(width: max(clamped > 0 ? 3 : 0, geo.size.width * clamped))
+                        .animation(.easeInOut(duration: 0.3), value: clamped)
+                    if let paceFraction, paceFraction > 0.02, paceFraction < 0.98 {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.45))
+                            .frame(width: 1.5, height: 6)
+                            .offset(x: geo.size.width * paceFraction - 0.75)
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+            .frame(height: 5)
+        } else {
+            Capsule()
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .foregroundStyle(.tertiary)
+                .frame(height: 5)
+        }
     }
 
     private var valueText: String {
@@ -780,6 +977,11 @@ struct QuotaBar: View {
 
     private var usageTint: Color {
         Palette.usageColor(usedFraction: window.usedFraction ?? 0)
+    }
+
+    private var valueTint: Color {
+        guard let used = window.usedFraction else { return .primary }
+        return used >= 0.80 ? usageTint : .primary
     }
 
     /// Never rely on colour alone: critical usage always gets a glyph; with
@@ -791,10 +993,32 @@ struct QuotaBar: View {
         return nil
     }
 
-    private func resetText(now: Date) -> String {
+    private func elapsedFraction(now: Date) -> Double? {
+        guard window.resetKnown,
+              let total = window.windowSeconds, total > 0,
+              let remaining = window.secondsUntilReset(now: now) else { return nil }
+        let elapsed = 1.0 - (remaining / Double(total))
+        return min(max(elapsed, 0), 1)
+    }
+
+    private func compactResetText(now: Date) -> String? {
+        guard window.resetKnown, let seconds = window.secondsUntilReset(now: now) else { return nil }
+        if seconds <= 0 { return "即将重置" }
+        return "↻ \(CountdownFormatter.format(seconds: seconds))"
+    }
+
+    private func fullResetText(now: Date) -> String {
         guard window.resetKnown, let seconds = window.secondsUntilReset(now: now) else { return "重置时间未知" }
         if seconds <= 0 { return "已到重置时间，等待刷新" }
         return "\(CountdownFormatter.format(seconds: seconds)) 后重置"
+    }
+
+    private func tooltipText(now: Date) -> String {
+        var parts = [fullResetText(now: now), "来源：\(window.source.label)"]
+        if window.remainingDisplay.precision != .unknown {
+            parts.insert("剩余 \(window.remainingDisplay.display)", at: 0)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -804,24 +1028,34 @@ struct MetricRow: View {
     let metric: MetricValue
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: symbol)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(tint)
-                .frame(width: 16)
+                .frame(width: 13)
                 .accessibilityHidden(true)
             Text(metric.display)
-                .font(.callout.monospacedDigit())
-            Spacer()
-            if metric.precision == .estimated {
-                Text("估算")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .font(.caption.monospacedDigit().weight(.medium))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(tagLabel)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 0.5)
+                .background(tint.opacity(0.12), in: Capsule())
         }
         .help("\(metric.kind.displayLabel) · 来源：\(metric.source.label)")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(metric.kind.displayLabel)：\(metric.display)")
+    }
+
+    private var tagLabel: String {
+        switch metric.kind {
+        case .apiSpend: return metric.precision == .estimated ? "API 估算" : "API"
+        case .locallyObservedTokens: return "本地估算"
+        case .subscriptionQuota: return "配额"
+        }
     }
 
     private var symbol: String {
@@ -888,11 +1122,12 @@ struct StatusBadge: View {
     let tint: Color
     var body: some View {
         Text(text)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 6)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(tint.opacity(0.15), in: Capsule())
             .foregroundStyle(tint)
+            .lineLimit(1)
     }
 }
 
