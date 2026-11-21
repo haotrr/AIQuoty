@@ -9,6 +9,7 @@ public struct AppPreferences: Codable, Sendable, Equatable {
     public var enableLocalOpenCodeLogs: Bool
     public var enableLocalClineLogs: Bool
     public var pinnedAccountIDs: [String]
+    public var hiddenHomeAccountIDs: [String]
     public var menuBarAccountIDs: [String]
     public var menuBarIconOnly: Bool
     public var accountGroups: [String: String]
@@ -29,6 +30,7 @@ public struct AppPreferences: Codable, Sendable, Equatable {
         enableLocalOpenCodeLogs: Bool = false,
         enableLocalClineLogs: Bool = false,
         pinnedAccountIDs: [String] = [],
+        hiddenHomeAccountIDs: [String] = [],
         menuBarAccountIDs: [String] = [],
         menuBarIconOnly: Bool = false,
         accountGroups: [String: String] = [:],
@@ -42,6 +44,7 @@ public struct AppPreferences: Codable, Sendable, Equatable {
         self.enableLocalOpenCodeLogs = enableLocalOpenCodeLogs
         self.enableLocalClineLogs = enableLocalClineLogs
         self.pinnedAccountIDs = pinnedAccountIDs
+        self.hiddenHomeAccountIDs = hiddenHomeAccountIDs
         self.menuBarAccountIDs = menuBarAccountIDs
         self.menuBarIconOnly = menuBarIconOnly
         self.accountGroups = accountGroups
@@ -58,6 +61,7 @@ public struct AppPreferences: Codable, Sendable, Equatable {
         self.enableLocalOpenCodeLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalOpenCodeLogs) ?? false
         self.enableLocalClineLogs = try c.decodeIfPresent(Bool.self, forKey: .enableLocalClineLogs) ?? false
         self.pinnedAccountIDs = try c.decodeIfPresent([String].self, forKey: .pinnedAccountIDs) ?? []
+        self.hiddenHomeAccountIDs = try c.decodeIfPresent([String].self, forKey: .hiddenHomeAccountIDs) ?? []
         self.menuBarAccountIDs = try c.decodeIfPresent([String].self, forKey: .menuBarAccountIDs) ?? []
         self.menuBarIconOnly = try c.decodeIfPresent(Bool.self, forKey: .menuBarIconOnly) ?? false
         self.accountGroups = try c.decodeIfPresent([String: String].self, forKey: .accountGroups) ?? [:]

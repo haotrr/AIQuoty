@@ -187,6 +187,36 @@ final class AppModel: ObservableObject {
         preferences.menuBarIconOnly = enabled
     }
 
+    var homeSnapshots: [AccountSnapshot] {
+        state.snapshots.filter { isShownOnHome($0.account.id) }
+    }
+
+    func isShownOnHome(_ accountID: String) -> Bool {
+        !preferences.hiddenHomeAccountIDs.contains(accountID)
+    }
+
+    func setShownOnHome(_ accountID: String, shown: Bool) {
+        var prefs = preferences
+        if shown {
+            prefs.hiddenHomeAccountIDs.removeAll { $0 == accountID }
+        } else if !prefs.hiddenHomeAccountIDs.contains(accountID) {
+            prefs.hiddenHomeAccountIDs.append(accountID)
+        }
+        preferences = prefs
+    }
+
+    func showAllHomeAccounts() {
+        var prefs = preferences
+        prefs.hiddenHomeAccountIDs = []
+        preferences = prefs
+    }
+
+    func hideAllHomeAccounts() {
+        var prefs = preferences
+        prefs.hiddenHomeAccountIDs = state.snapshots.map(\.account.id)
+        preferences = prefs
+    }
+
     init() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         bootstrap()

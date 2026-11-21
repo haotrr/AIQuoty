@@ -391,6 +391,14 @@ final class MainstreamProvidersTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppPreferences.self, from: legacyJSON)
         XCTAssertEqual(decoded.menuBarAccountIDs, [])
         XCTAssertEqual(decoded.menuBarIconOnly, false)
+        XCTAssertEqual(decoded.hiddenHomeAccountIDs, [])
+
+        // Home display preferences round-trip cleanly.
+        var custom = AppPreferences.default
+        custom.hiddenHomeAccountIDs = ["copilot.default", "deepseek.dsh"]
+        let encoded = try JSONEncoder().encode(custom)
+        let roundTripped = try JSONDecoder().decode(AppPreferences.self, from: encoded)
+        XCTAssertEqual(roundTripped.hiddenHomeAccountIDs, ["copilot.default", "deepseek.dsh"])
     }
 
     func testAntigravityLocalStateParserAndProvider() async throws {
