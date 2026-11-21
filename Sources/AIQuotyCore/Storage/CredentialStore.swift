@@ -55,18 +55,23 @@ public struct NullExternalKeychainReader: ExternalKeychainReading {
 
 #if os(macOS)
 private final class ExternalKeychainCache: @unchecked Sendable {
-    static let shared = ExternalKeychainCache()
-    private let lock = NSLock()
-    private var deniedKeys: Set<String> = []
-
-    func isDenied(_ key: String) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        return deniedKeys.contains(key)
+    enum Entry {
+        case value(Data)
+        case denied
     }
 
-    func markDenied(_ key: String) {
+    static let shared = ExternalKeychainCache()
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    func get(_ key: String) -> Entry? {
         lock.lock(); defer { lock.unlock() }
-        deniedKeys.insert(key)
+        return entries[key]
+    }
+
+    func set(_ key: String, entry: Entry) {
+        lock.lock(); defer { lock.unlock() }
+        entries[key] = entry
     }
 }
 
@@ -75,8 +80,11 @@ public struct MacOSExternalKeychainReader: ExternalKeychainReading {
 
     public func readGenericPassword(service: String, account: String?) -> Data? {
         let cacheKey = "\(service)::\(account ?? "")"
-        if ExternalKeychainCache.shared.isDenied(cacheKey) {
-            return nil
+        if let cached = ExternalKeychainCache.shared.get(cacheKey) {
+            switch cached {
+            case .value(let data): return data
+            case .denied: return nil
+            }
         }
         // First check existence via attributes-only query (never triggers a Keychain password prompt).
         var probe: [String: Any] = [
@@ -105,13 +113,13 @@ public struct MacOSExternalKeychainReader: ExternalKeychainReading {
         }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecUserCanceled || status == errSecAuthFailed || status == errSecInteractionNotAllowed {
-            ExternalKeychainCache.shared.markDenied(cacheKey)
-            return nil
-        }
         guard status == errSecSuccess, let data = item as? Data else {
+            if status != errSecItemNotFound {
+                ExternalKeychainCache.shared.set(cacheKey, entry: .denied)
+            }
             return nil
         }
+        ExternalKeychainCache.shared.set(cacheKey, entry: .value(data))
         return data
     }
 }
@@ -211,11 +219,17 @@ public struct KeychainCredentialStore: CredentialStore {
         }
         // 1. Check if consolidated vault.v1 exists (attribute-only probe never prompts).
         if itemExists(account: Self.vaultAccount) {
-            if let raw = try readRawItem(account: Self.vaultAccount),
-               let data = raw.data(using: .utf8),
-               let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-                KeychainVaultCache.shared.set(service: service, vault: decoded)
-                return decoded
+            do {
+                if let raw = try readRawItem(account: Self.vaultAccount),
+                   let data = raw.data(using: .utf8),
+                   let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+                    KeychainVaultCache.shared.set(service: service, vault: decoded)
+                    return decoded
+                }
+            } catch {
+                // User denied or Keychain unavailable — cache empty map for this session so we never loop-prompt.
+                KeychainVaultCache.shared.set(service: service, vault: [:])
+                return [:]
             }
         }
 
