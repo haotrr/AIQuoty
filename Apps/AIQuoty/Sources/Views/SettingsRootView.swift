@@ -108,9 +108,7 @@ private struct GeneralSettingsTab: View {
             } header: {
                 Text("菜单栏")
             } footer: {
-                Text("菜单栏最多显示 \(MenuBarFormatter.maxItems) 个账号，其余合并为 +N，避免在刘海屏上被系统隐藏。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFooter("菜单栏最多显示 \(MenuBarFormatter.maxItems) 个账号，其余合并为 +N，避免在刘海屏上被系统隐藏。")
             }
 
             Section {
@@ -121,17 +119,13 @@ private struct GeneralSettingsTab: View {
             } header: {
                 Text("本地日志")
             } footer: {
-                Text("读取本机日志估算 Token 用量，只作估算参考，绝不会显示为订阅剩余配额。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFooter("读取本机日志估算 Token 用量，只作估算参考，绝不会显示为订阅剩余配额。")
             }
 
             Section {
                 Toggle("演示模式", isOn: $model.preferences.demoMode)
             } footer: {
-                Text("使用合成数据预览全部 Agent 的界面效果，不读取真实账号。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionFooter("使用合成数据预览全部 Agent 的界面效果，不读取真实账号。")
             }
         }
         .formStyle(.grouped)
@@ -662,9 +656,7 @@ private struct ProviderDetailView: View {
                     Text("一键登录")
                 } footer: {
                     if let note = spec.oauthNote {
-                        Text(note)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        SectionFooter(note)
                     }
                 }
             }
@@ -687,9 +679,7 @@ private struct ProviderDetailView: View {
                             ForEach(spec.secrets) { secretRow($0) }
                         }
                     } footer: {
-                        Text("仅保存在本机钥匙串；也可在 ~/.aiquoty/oauth.json 中配置。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        SectionFooter("仅保存在本机钥匙串；也可在 ~/.aiquoty/oauth.json 中配置。")
                     }
                 } else {
                     Section {
@@ -697,9 +687,7 @@ private struct ProviderDetailView: View {
                     } header: {
                         Text("手动填写")
                     } footer: {
-                        Text("仅保存在本机钥匙串。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        SectionFooter("仅保存在本机钥匙串。")
                     }
                 }
             }
@@ -1017,6 +1005,19 @@ struct DashboardView: View {
     private func openSettingsAndActivate() {
         openSettings()
         AppWindowActivator.activateWindow(identifierHint: "Settings")
+    }
+}
+
+private struct SectionFooter: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif
