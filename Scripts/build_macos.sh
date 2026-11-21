@@ -14,6 +14,16 @@ if [[ -z "${DEVELOPER_DIR:-}" ]] && [[ "$(xcode-select -p 2>/dev/null || true)" 
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 fi
 
+# Optionally load gitignored local build secrets (.env.build / .env.local) if present.
+for env_file in "$ROOT/.env.build" "$ROOT/.env.local"; do
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+  fi
+done
+
 swift --version
 swift test --package-path "$ROOT"
 
@@ -43,6 +53,21 @@ cat > "$DIST/AIQuoty.app/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# Inject build-time OAuth client credentials into Info.plist (never committed to Git).
+PLIST_PATH="$DIST/AIQuoty.app/Contents/Info.plist"
+inject_plist_string() {
+  local key="$1"
+  local val="$2"
+  if [[ -n "$val" ]]; then
+    /usr/libexec/PlistBuddy -c "Add :$key string $val" "$PLIST_PATH" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Set :$key $val" "$PLIST_PATH"
+  fi
+}
+inject_plist_string "AIQuotyAntigravityOAuthClientID" "${AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID:-}"
+inject_plist_string "AIQuotyAntigravityOAuthClientSecret" "${AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET:-}"
+inject_plist_string "AIQuotyGeminiOAuthClientID" "${AIQUOTY_GEMINI_OAUTH_CLIENT_ID:-}"
+inject_plist_string "AIQuotyGeminiOAuthClientSecret" "${AIQUOTY_GEMINI_OAUTH_CLIENT_SECRET:-}"
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -z "$SIGN_IDENTITY" ]]; then

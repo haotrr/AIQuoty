@@ -13,3 +13,5 @@ xcuserdata/
 .vscode/
 *.log
 /tmp/
+.env.local
+.env.build

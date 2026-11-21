@@ -508,5 +508,18 @@ final class MainstreamProvidersTests: XCTestCase {
         )
         XCTAssertEqual(overridden.clientID, "keychain-agy-id")
         XCTAssertEqual(overridden.clientSecret, "file-agy-secret")
+
+        // Falls back to build-time injected Info.plist keys when Keychain/env/file are absent.
+        let fromPlist = GoogleOAuthAppConfig.antigravity.resolved(
+            credentials: InMemoryCredentialStore(),
+            environment: [:],
+            fileSystem: MemoryFileSystem(),
+            bundleInfo: [
+                "AIQuotyAntigravityOAuthClientID": "plist-agy-id.apps.googleusercontent.com",
+                "AIQuotyAntigravityOAuthClientSecret": "plist-agy-secret",
+            ]
+        )
+        XCTAssertEqual(fromPlist.clientID, "plist-agy-id.apps.googleusercontent.com")
+        XCTAssertEqual(fromPlist.clientSecret, "plist-agy-secret")
     }
 }

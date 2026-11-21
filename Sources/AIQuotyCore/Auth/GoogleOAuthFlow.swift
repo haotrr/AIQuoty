@@ -16,6 +16,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
     public var clientSecretAccount: String
     public var envClientIDKey: String
     public var envClientSecretKey: String
+    public var infoPlistClientIDKey: String
+    public var infoPlistClientSecretKey: String
     public var riskNotice: String?
 
     public init(
@@ -31,6 +33,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         clientSecretAccount: String,
         envClientIDKey: String,
         envClientSecretKey: String,
+        infoPlistClientIDKey: String = "",
+        infoPlistClientSecretKey: String = "",
         riskNotice: String? = nil
     ) {
         self.id = id
@@ -45,6 +49,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         self.clientSecretAccount = clientSecretAccount
         self.envClientIDKey = envClientIDKey
         self.envClientSecretKey = envClientSecretKey
+        self.infoPlistClientIDKey = infoPlistClientIDKey
+        self.infoPlistClientSecretKey = infoPlistClientSecretKey
         self.riskNotice = riskNotice
     }
 
@@ -58,14 +64,15 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         "~/.aiquoty/config.json",
     ]
 
-    /// Resolves user-supplied OAuth Client ID and Client Secret from:
-    /// 1. Keychain  2. Environment variables  3. `~/.aiquoty/oauth.json` (or `~/.aiquoty/config.json`).
+    /// Resolves OAuth Client ID and Client Secret in order:
+    /// 1. Keychain  2. Runtime environment  3. `~/.aiquoty/oauth.json`  4. App bundle `Info.plist` (build-time injected).
     /// No OAuth client credentials are hardcoded in source control.
     public func resolved(
         credentials: CredentialStore,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileSystem: FileSystemReading = LocalFileSystem(),
-        configPaths: [String] = GoogleOAuthAppConfig.defaultConfigPaths
+        configPaths: [String] = GoogleOAuthAppConfig.defaultConfigPaths,
+        bundleInfo: [String: Any] = Bundle.main.infoDictionary ?? [:]
     ) -> GoogleOAuthAppConfig {
         var copy = self
         let fileEntry = (copy.clientID.isEmpty || copy.clientSecret.isEmpty)
@@ -78,6 +85,10 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
                 copy.clientID = envID
             } else if let fileID = fileEntry?.clientID, !fileID.isEmpty {
                 copy.clientID = fileID
+            } else if !infoPlistClientIDKey.isEmpty,
+                      let plistID = bundleInfo[infoPlistClientIDKey] as? String,
+                      !plistID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copy.clientID = plistID.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
         if copy.clientSecret.isEmpty {
@@ -87,6 +98,10 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
                 copy.clientSecret = envSecret
             } else if let fileSecret = fileEntry?.clientSecret, !fileSecret.isEmpty {
                 copy.clientSecret = fileSecret
+            } else if !infoPlistClientSecretKey.isEmpty,
+                      let plistSecret = bundleInfo[infoPlistClientSecretKey] as? String,
+                      !plistSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                copy.clientSecret = plistSecret.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
         return copy
@@ -148,6 +163,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         clientSecretAccount: CredentialAccount.geminiOAuthClientSecret,
         envClientIDKey: "AIQUOTY_GEMINI_OAUTH_CLIENT_ID",
         envClientSecretKey: "AIQUOTY_GEMINI_OAUTH_CLIENT_SECRET",
+        infoPlistClientIDKey: "AIQuotyGeminiOAuthClientID",
+        infoPlistClientSecretKey: "AIQuotyGeminiOAuthClientSecret",
         riskNotice: nil
     )
 
@@ -168,6 +185,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         clientSecretAccount: CredentialAccount.antigravityOAuthClientSecret,
         envClientIDKey: "AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID",
         envClientSecretKey: "AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+        infoPlistClientIDKey: "AIQuotyAntigravityOAuthClientID",
+        infoPlistClientSecretKey: "AIQuotyAntigravityOAuthClientSecret",
         riskNotice: "提示：请先在下方填写 OAuth Client ID / Secret（仅存本机钥匙串，不写入源码）后再使用一键浏览器登录。"
     )
 }
