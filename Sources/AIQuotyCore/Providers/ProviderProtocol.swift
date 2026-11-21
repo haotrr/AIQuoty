@@ -122,7 +122,7 @@ public enum ProviderRegistry {
             ClaudeOAuthProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             CodexOAuthProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             CursorSessionProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
-            AntigravityProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
+            AntigravityProvider(http: http, clock: clock),
             GeminiCLIProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             OpenCodeProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),
             DeepSeekProvider(credentials: credentials, http: http, fileSystem: fileSystem, clock: clock),

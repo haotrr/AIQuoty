@@ -8,45 +8,33 @@ public struct AntigravityProvider: QuotaProvider {
         id: "antigravity",
         displayName: "Antigravity",
         implementationStatus: .implemented,
-        authMethods: [.localCLICredentials, .userPastedToken],
+        authMethods: [.localCLICredentials],
         supportedMetricKinds: [.subscriptionQuota],
-        notes: "优先自动只读复用本机 Antigravity 桌面端登录态（state.vscdb），无需手动填 Key；也支持应用内 Google OAuth 或钥匙串 Token。"
+        notes: "只读复用本机 Antigravity 桌面端登录态（state.vscdb），通过 loadCodeAssist + fetchAvailableModels 查询各模型族配额。"
     )
 
     public var descriptor: ProviderDescriptor { Self.descriptor }
 
-    private let credentials: CredentialStore
     private let http: HTTPClient
-    private let fileSystem: FileSystemReading
     private let stateReader: AntigravityStateReading
     private let clock: @Sendable () -> Date
     private let demoFixture: Data?
 
     public init(
-        credentials: CredentialStore,
         http: HTTPClient,
-        fileSystem: FileSystemReading,
         stateReader: AntigravityStateReading = SQLiteAntigravityStateReader(),
         clock: @escaping @Sendable () -> Date = { Date() },
         demoFixture: Data? = nil
     ) {
-        self.credentials = credentials
         self.http = http
-        self.fileSystem = fileSystem
         self.stateReader = stateReader
         self.clock = clock
         self.demoFixture = demoFixture
     }
 
     public func configuredAccounts() async -> [AccountIdentity] {
-        if let token = try? credentials.getSecret(account: CredentialAccount.antigravityOAuthToken), !token.isEmpty {
-            return [AccountIdentity(id: "antigravity.token", providerID: "antigravity", displayName: "Antigravity")]
-        }
         if let local = stateReader.readLocalState() {
             return [AccountIdentity(id: "antigravity.desktop", providerID: "antigravity", displayName: "Antigravity", email: local.email)]
-        }
-        if let bundle = GoogleOAuthBundle.load(from: credentials, account: CredentialAccount.antigravityOAuthBundle) {
-            return [AccountIdentity(id: "antigravity.oauth", providerID: "antigravity", displayName: "Antigravity", email: bundle.email)]
         }
         return []
     }
@@ -56,29 +44,26 @@ public struct AntigravityProvider: QuotaProvider {
         if request.demoMode, let demoFixture {
             return try [parseQuota(demoFixture, accountID: "antigravity.demo", fallbackEmail: nil, plan: "Pro", now: now)]
         }
-        let token: String
-        var email: String?
-        var accountID = "antigravity.desktop"
-        if let manual = try credentials.getSecret(account: CredentialAccount.antigravityOAuthToken), !manual.isEmpty {
-            token = manual
-            accountID = "antigravity.token"
-        } else if let local = stateReader.readLocalState() {
-            token = local.accessToken
-            email = local.email
-            accountID = "antigravity.desktop"
-        } else if let oauth = try await GoogleOAuthFlow.validAccessToken(
-            http: http,
-            app: .antigravity,
-            credentials: credentials,
-            now: now
-        ) {
-            token = oauth.accessToken
-            email = oauth.email
-            accountID = "antigravity.oauth"
-        } else {
-            throw ProviderError.notConfigured("未检测到本机 Antigravity 登录态。请先打开 Antigravity 桌面端登录，或在设置中配置 OAuth / Access Token。")
+        guard let local = stateReader.readLocalState() else {
+            throw ProviderError.notConfigured("未检测到本机 Antigravity 桌面端登录态（state.vscdb）。请先打开 Antigravity 桌面端登录。")
         }
+        let candidates = local.candidateAccessTokens.isEmpty ? [local.accessToken] : local.candidateAccessTokens
+        var lastAuthError: Error?
+        for candidate in candidates {
+            do {
+                return try await fetchWithToken(candidate, accountID: "antigravity.desktop", email: local.email, now: now)
+            } catch let err as ProviderError {
+                if case .authRequired = err {
+                    lastAuthError = err
+                    continue
+                }
+                throw err
+            }
+        }
+        throw lastAuthError ?? ProviderError.authRequired("Antigravity 桌面端令牌已过期，请刷新桌面端会话后重试。")
+    }
 
+    private func fetchWithToken(_ token: String, accountID: String, email: String?, now: Date) async throws -> [AccountSnapshot] {
         let headers: [String: String] = [
             "Authorization": "Bearer \(token)",
             "Content-Type": "application/json",
@@ -393,11 +378,18 @@ public enum AntigravityQuotaParser {
 
 public struct AntigravityLocalState: Sendable, Equatable {
     public var accessToken: String
+    public var candidateAccessTokens: [String]
     public var refreshToken: String?
     public var email: String?
 
-    public init(accessToken: String, refreshToken: String? = nil, email: String? = nil) {
+    public init(
+        accessToken: String,
+        candidateAccessTokens: [String] = [],
+        refreshToken: String? = nil,
+        email: String? = nil
+    ) {
         self.accessToken = accessToken
+        self.candidateAccessTokens = candidateAccessTokens.isEmpty ? [accessToken] : candidateAccessTokens
         self.refreshToken = refreshToken
         self.email = email
     }
@@ -415,9 +407,26 @@ public struct NullAntigravityStateReader: AntigravityStateReading {
 /// Parses Antigravity desktop `state.vscdb` ItemTable entries into a local OAuth state.
 public enum AntigravityStateParser {
     public static func parse(authStatusJSON: String?, oauthStateValues: [String]) -> AntigravityLocalState? {
-        var accessToken: String?
+        var candidates: [String] = []
         var refreshToken: String?
         var email: String?
+
+        func appendCandidate(_ token: String?) {
+            guard let token, !token.isEmpty, !candidates.contains(token) else { return }
+            candidates.append(token)
+        }
+
+        // Prefer live synced OAuth state values (e.g. antigravityUnifiedStateSync.oauthToken)
+        // ahead of antigravityAuthStatus.apiKey, which can lag behind token refreshes.
+        for raw in oauthStateValues where !raw.isEmpty {
+            var foundAccess: String?
+            var foundRefresh: String?
+            var foundEmail: String?
+            extractFromEncodedValue(raw, depth: 0, accessToken: &foundAccess, refreshToken: &foundRefresh, email: &foundEmail)
+            appendCandidate(foundAccess)
+            if refreshToken == nil, let foundRefresh { refreshToken = foundRefresh }
+            if email == nil, let foundEmail { email = foundEmail }
+        }
 
         if let authStatusJSON, let data = authStatusJSON.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -426,25 +435,18 @@ public enum AntigravityStateParser {
             }
             for key in ["apiKey", "accessToken", "access_token", "oauthToken"] {
                 if let tok = obj[key] as? String, isGoogleAccessToken(tok) {
-                    accessToken = tok
-                    break
+                    appendCandidate(tok)
                 }
             }
         }
 
-        for raw in oauthStateValues where !raw.isEmpty {
-            var foundAccess: String?
-            var foundRefresh: String?
-            var foundEmail: String?
-            extractFromEncodedValue(raw, depth: 0, accessToken: &foundAccess, refreshToken: &foundRefresh, email: &foundEmail)
-            if accessToken == nil, let foundAccess { accessToken = foundAccess }
-            if refreshToken == nil, let foundRefresh { refreshToken = foundRefresh }
-            if email == nil, let foundEmail { email = foundEmail }
-            if accessToken != nil && email != nil { break }
-        }
-
-        guard let accessToken else { return nil }
-        return AntigravityLocalState(accessToken: accessToken, refreshToken: refreshToken, email: email)
+        guard let primary = candidates.first else { return nil }
+        return AntigravityLocalState(
+            accessToken: primary,
+            candidateAccessTokens: candidates,
+            refreshToken: refreshToken,
+            email: email
+        )
     }
 
     private static func extractFromEncodedValue(

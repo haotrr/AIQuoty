@@ -81,7 +81,7 @@ public enum LocalAgentDetector {
                 "~/Library/Application Support/Antigravity",
                 "~/Library/Application Support/antigravity",
             ],
-            setupHint: "登录 Antigravity 桌面端即可自动读取 state.vscdb，无需填写 Key；也支持在设置中配置 OAuth。"
+            setupHint: "登录 Antigravity 桌面端即可自动读取 state.vscdb，无需额外授权或填写 Key。"
         ),
         Rule(
             providerID: "gemini",

@@ -64,8 +64,6 @@ inject_plist_string() {
       || /usr/libexec/PlistBuddy -c "Set :$key $val" "$PLIST_PATH"
   fi
 }
-inject_plist_string "AIQuotyAntigravityOAuthClientID" "${AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID:-}"
-inject_plist_string "AIQuotyAntigravityOAuthClientSecret" "${AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET:-}"
 inject_plist_string "AIQuotyGeminiOAuthClientID" "${AIQUOTY_GEMINI_OAUTH_CLIENT_ID:-}"
 inject_plist_string "AIQuotyGeminiOAuthClientSecret" "${AIQUOTY_GEMINI_OAUTH_CLIENT_SECRET:-}"
 

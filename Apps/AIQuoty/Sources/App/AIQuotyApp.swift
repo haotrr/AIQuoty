@@ -287,11 +287,12 @@ final class AppModel: ObservableObject {
     }
 
     func supportsOneClickSignIn(providerID: String) -> Bool {
-        providerID == "copilot" || providerID == "gemini" || providerID == "antigravity"
+        providerID == "copilot" || providerID == "gemini"
     }
 
     /// Title of the primary sign-in action for a provider, or nil when it must be configured manually.
     func signInActionTitle(for providerID: String) -> String? {
+        if providerID == "antigravity" { return "打开桌面端登录" }
         if supportsOneClickSignIn(providerID: providerID) { return "一键登录" }
         if CLILoginSpec.entry(for: providerID) != nil { return "终端登录" }
         return nil
@@ -304,9 +305,25 @@ final class AppModel: ObservableObject {
         case "gemini":
             startGoogleSignIn(app: .gemini)
         case "antigravity":
-            startGoogleSignIn(app: .antigravity)
+            openAntigravityDesktopApp()
         default:
             launchCLILogin(providerID: providerID)
+        }
+    }
+
+    func openAntigravityDesktopApp() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "/Applications/Antigravity.app",
+            "/Applications/Antigravity IDE.app",
+            "\(home)/Applications/Antigravity.app",
+            "\(home)/Applications/Antigravity IDE.app",
+        ]
+        if let appPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: appPath))
+            signInNotice = "已打开 Antigravity 桌面端。完成登录后点击「刷新读取」，AIQuoty 会自动复用本地登录态。"
+        } else {
+            signInNotice = "未在 /Applications 中找到 Antigravity 桌面端，请手动打开 Antigravity 登录后点击「刷新读取」。"
         }
     }
 
@@ -454,7 +471,7 @@ final class AppModel: ObservableObject {
             ClaudeOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.claudeUsageJSON),
             CodexOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.codexUsageJSON),
             CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, cursorStateReader: NullCursorStateReader(), externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.cursorUsageJSON),
-            AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, stateReader: NullAntigravityStateReader(), demoFixture: DemoFixtures.antigravityQuotaJSON),
+            AntigravityProvider(http: FixtureHTTPClient(), stateReader: NullAntigravityStateReader(), demoFixture: DemoFixtures.antigravityQuotaJSON),
             GeminiCLIProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.geminiQuotaJSON),
             OpenCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.openCodeUsageJSON),
             DeepSeekProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: fs, demoFixture: DemoFixtures.deepSeekBalanceJSON),

@@ -308,8 +308,7 @@ final class MainstreamProvidersTests: XCTestCase {
         XCTAssertFalse(pkce.challenge.isEmpty)
         let store = InMemoryCredentialStore(seed: [
             CredentialAccount.geminiOAuthClientID: "test-gemini-client-id",
-            CredentialAccount.antigravityOAuthClientID: "test-agy-client-id",
-            CredentialAccount.antigravityOAuthClientSecret: "test-agy-client-secret",
+            CredentialAccount.geminiOAuthClientSecret: "test-gemini-client-secret",
         ])
         let resolvedGemini = GoogleOAuthAppConfig.gemini.resolved(credentials: store, environment: [:])
         XCTAssertTrue(resolvedGemini.isConfigured)
@@ -327,32 +326,19 @@ final class MainstreamProvidersTests: XCTestCase {
             refreshToken: "refresh-123",
             expiryDate: Date(timeIntervalSince1970: 1_000),
             email: "user@example.com",
-            clientID: "test-agy-client-id"
+            clientID: "test-gemini-client-id"
         )
-        try expired.save(to: store, account: CredentialAccount.antigravityOAuthBundle)
+        try expired.save(to: store, account: CredentialAccount.geminiOAuthBundle)
 
         let refreshResp = #"{"access_token":"fresh-token","expires_in":3600}"#.data(using: .utf8)!
-        let loadResp = #"{"cloudaicompanionProject":"proj-123","paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#.data(using: .utf8)!
-        let fetchModelsResp = """
-        {
-          "models": {
-            "gemini-3.1-pro-low": { "displayName": "Gemini 3.1 Pro", "quotaInfo": { "remainingFraction": 0.62, "resetTime": "2030-01-01T15:00:00Z" } },
-            "gemini-3-flash": { "displayName": "Gemini 3 Flash", "quotaInfo": { "remainingFraction": 0.90, "resetTime": "2030-01-01T15:00:00Z" } },
-            "claude-sonnet-4-6": { "displayName": "Claude Sonnet 4.6", "quotaInfo": { "remainingFraction": 0.45, "resetTime": "2030-01-01T15:00:00Z" } },
-            "chat_20706": { "displayName": "Internal", "quotaInfo": { "remainingFraction": 0.1 } }
-          }
-        }
-        """.data(using: .utf8)!
         let http = FixtureHTTPClient(responses: [
             "oauth2.googleapis.com/token": HTTPResponse(statusCode: 200, headers: [:], body: refreshResp),
-            "loadCodeAssist": HTTPResponse(statusCode: 200, headers: [:], body: loadResp),
-            "fetchAvailableModels": HTTPResponse(statusCode: 200, headers: [:], body: fetchModelsResp),
         ])
 
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let resolved = try await GoogleOAuthFlow.validAccessToken(
             http: http,
-            app: .antigravity,
+            app: .gemini,
             credentials: store,
             now: now
         )
@@ -360,29 +346,22 @@ final class MainstreamProvidersTests: XCTestCase {
         XCTAssertEqual(resolved?.email, "user@example.com")
 
         // Verify persisted bundle was updated in Keychain
-        let saved = GoogleOAuthBundle.load(from: store, account: CredentialAccount.antigravityOAuthBundle)
+        let saved = GoogleOAuthBundle.load(from: store, account: CredentialAccount.geminiOAuthBundle)
         XCTAssertEqual(saved?.accessToken, "fresh-token")
-
-        // Verify AntigravityProvider fetches live quota using the saved bundle
-        let agy = AntigravityProvider(credentials: store, http: http, fileSystem: MemoryFileSystem())
-        let snaps = try await agy.fetch(request: ProviderFetchRequest(now: now))
-        XCTAssertEqual(snaps.count, 1)
-        XCTAssertEqual(snaps[0].windows.count, 3)
     }
 
     func testMenuBarFormatterSelectionAndIconOnly() throws {
         let now = Date()
         let agy = try AntigravityProvider(
-            credentials: InMemoryCredentialStore(),
             http: FixtureHTTPClient(),
-            fileSystem: MemoryFileSystem()
-        ).parseQuota(DemoFixtures.antigravityQuotaJSON, accountID: "antigravity.oauth", plan: "Pro", now: now)
+            stateReader: NullAntigravityStateReader()
+        ).parseQuota(DemoFixtures.antigravityQuotaJSON, accountID: "antigravity.desktop", plan: "Pro", now: now)
         let ds = try DeepSeekBalanceParser.parse(json: DemoFixtures.deepSeekBalanceJSON, accountID: "deepseek.dsh", displayName: "DeepSeek Harness", now: now)
 
         // Multiple selected accounts render in exact user-selected order.
         let multi = MenuBarFormatter.summary(
             snapshots: [agy, ds],
-            selectedAccountIDs: ["deepseek.dsh", "antigravity.oauth"]
+            selectedAccountIDs: ["deepseek.dsh", "antigravity.desktop"]
         )
         XCTAssertEqual(multi, "DS ¥110 · AGY 55%")
 
@@ -391,13 +370,13 @@ final class MainstreamProvidersTests: XCTestCase {
         var extra2 = ds; extra2.account.id = "deepseek.extra2"
         let overflow = MenuBarFormatter.summary(
             snapshots: [agy, ds, extra1, extra2],
-            selectedAccountIDs: ["antigravity.oauth", "deepseek.dsh", "deepseek.extra1", "deepseek.extra2"]
+            selectedAccountIDs: ["antigravity.desktop", "deepseek.dsh", "deepseek.extra1", "deepseek.extra2"]
         )
         XCTAssertEqual(overflow, "AGY 55% · DS ¥110 · DS ¥110 +1")
 
         // Icon-only mode returns empty text.
         XCTAssertEqual(
-            MenuBarFormatter.summary(snapshots: [agy, ds], selectedAccountIDs: ["antigravity.oauth"], iconOnly: true),
+            MenuBarFormatter.summary(snapshots: [agy, ds], selectedAccountIDs: ["antigravity.desktop"], iconOnly: true),
             ""
         )
 
@@ -415,7 +394,7 @@ final class MainstreamProvidersTests: XCTestCase {
     }
 
     func testAntigravityLocalStateParserAndProvider() async throws {
-        // Build a nested Base64-encoded protobuf containing a Google access token & refresh token.
+        // Build a nested Base64-encoded protobuf containing a fresh Google access token & refresh token.
         func pbString(field: UInt8, _ value: String) -> Data {
             let utf8 = Data(value.utf8)
             var out = Data([field << 3 | 2])
@@ -429,50 +408,65 @@ final class MainstreamProvidersTests: XCTestCase {
             return out
         }
 
-        let access = "ya29.a0AfH6SMB_test_antigravity_access_token_123456"
+        let freshAccess = "ya29.a0AfH6SMB_fresh_synced_antigravity_token_123456"
+        let staleAccess = "ya29.a0AfH6SMB_stale_auth_status_token_987654"
         let refresh = "1//0g_test_antigravity_refresh_token_abcdef"
         var inner = Data()
-        inner.append(pbString(field: 1, access))
+        inner.append(pbString(field: 1, freshAccess))
         inner.append(pbString(field: 3, refresh))
         let outer = pbString(field: 1, inner.base64EncodedString())
         let encoded = outer.base64EncodedString()
 
-        let authStatus = #"{"email":"dev@example.com","name":"Dev"}"#
+        // Live synced oauthStateValues must take precedence over a stale apiKey in antigravityAuthStatus.
+        let authStatus = #"{"email":"dev@example.com","apiKey":"ya29.a0AfH6SMB_stale_auth_status_token_987654"}"#
         let parsed = AntigravityStateParser.parse(authStatusJSON: authStatus, oauthStateValues: [encoded])
-        XCTAssertEqual(parsed?.accessToken, access)
+        XCTAssertEqual(parsed?.accessToken, freshAccess)
+        XCTAssertEqual(parsed?.candidateAccessTokens, [freshAccess, staleAccess])
         XCTAssertEqual(parsed?.refreshToken, refresh)
         XCTAssertEqual(parsed?.email, "dev@example.com")
 
-        // Also works with plain JSON apiKey in antigravityAuthStatus.
-        let jsonOnly = #"{"email":"plain@example.com","apiKey":"ya29.a0AfH6SMB_plain_json_token_987654"}"#
-        let parsedJSON = AntigravityStateParser.parse(authStatusJSON: jsonOnly, oauthStateValues: [])
-        XCTAssertEqual(parsedJSON?.accessToken, "ya29.a0AfH6SMB_plain_json_token_987654")
-        XCTAssertEqual(parsedJSON?.email, "plain@example.com")
+        // Also works with plain JSON apiKey alone in antigravityAuthStatus.
+        let parsedJSON = AntigravityStateParser.parse(authStatusJSON: authStatus, oauthStateValues: [])
+        XCTAssertEqual(parsedJSON?.accessToken, staleAccess)
+        XCTAssertEqual(parsedJSON?.email, "dev@example.com")
 
-        // Provider uses local desktop state without requiring any OAuth Client ID/Secret.
+        // Provider uses local desktop state exclusively to fetch live quota.
         struct StubAntigravityReader: AntigravityStateReading {
             let state: AntigravityLocalState?
             func readLocalState() -> AntigravityLocalState? { state }
         }
+        let loadResp = #"{"cloudaicompanionProject":"proj-123","paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}"#.data(using: .utf8)!
+        let fetchModelsResp = """
+        {
+          "models": {
+            "gemini-3.1-pro-low": { "displayName": "Gemini 3.1 Pro", "quotaInfo": { "remainingFraction": 0.62, "resetTime": "2030-01-01T15:00:00Z" } },
+            "gemini-3-flash": { "displayName": "Gemini 3 Flash", "quotaInfo": { "remainingFraction": 0.90, "resetTime": "2030-01-01T15:00:00Z" } },
+            "claude-sonnet-4-6": { "displayName": "Claude Sonnet 4.6", "quotaInfo": { "remainingFraction": 0.45, "resetTime": "2030-01-01T15:00:00Z" } },
+            "chat_20706": { "displayName": "Internal", "quotaInfo": { "remainingFraction": 0.1 } }
+          }
+        }
+        """.data(using: .utf8)!
+        let http = FixtureHTTPClient(responses: [
+            "loadCodeAssist": HTTPResponse(statusCode: 200, headers: [:], body: loadResp),
+            "fetchAvailableModels": HTTPResponse(statusCode: 200, headers: [:], body: fetchModelsResp),
+        ])
         let provider = AntigravityProvider(
-            credentials: InMemoryCredentialStore(),
-            http: FixtureHTTPClient(),
-            fileSystem: MemoryFileSystem(),
+            http: http,
             stateReader: StubAntigravityReader(state: parsed)
         )
         let accounts = await provider.configuredAccounts()
         XCTAssertEqual(accounts.count, 1)
         XCTAssertEqual(accounts.first?.id, "antigravity.desktop")
         XCTAssertEqual(accounts.first?.email, "dev@example.com")
+
+        let snaps = try await provider.fetch(request: ProviderFetchRequest(now: Date(timeIntervalSince1970: 1_700_000_000)))
+        XCTAssertEqual(snaps.count, 1)
+        XCTAssertEqual(snaps[0].windows.count, 3)
     }
 
     func testGoogleOAuthConfigResolvesFromLocalConfigFile() throws {
         let json = """
         {
-          "antigravity": {
-            "client_id": "file-agy-id.apps.googleusercontent.com",
-            "client_secret": "file-agy-secret"
-          },
           "gemini": {
             "clientId": "file-gem-id.apps.googleusercontent.com",
             "clientSecret": "file-gem-secret"
@@ -482,14 +476,6 @@ final class MainstreamProvidersTests: XCTestCase {
         let fs = MemoryFileSystem(files: ["~/.aiquoty/oauth.json": Data(json.utf8)])
 
         // Falls back to ~/.aiquoty/oauth.json when Keychain and env are empty.
-        let agy = GoogleOAuthAppConfig.antigravity.resolved(
-            credentials: InMemoryCredentialStore(),
-            environment: [:],
-            fileSystem: fs
-        )
-        XCTAssertEqual(agy.clientID, "file-agy-id.apps.googleusercontent.com")
-        XCTAssertEqual(agy.clientSecret, "file-agy-secret")
-
         let gem = GoogleOAuthAppConfig.gemini.resolved(
             credentials: InMemoryCredentialStore(),
             environment: [:],
@@ -500,26 +486,26 @@ final class MainstreamProvidersTests: XCTestCase {
 
         // Keychain takes precedence over env and file.
         let creds = InMemoryCredentialStore()
-        try creds.setSecret("keychain-agy-id", account: CredentialAccount.antigravityOAuthClientID)
-        let overridden = GoogleOAuthAppConfig.antigravity.resolved(
+        try creds.setSecret("keychain-gem-id", account: CredentialAccount.geminiOAuthClientID)
+        let overridden = GoogleOAuthAppConfig.gemini.resolved(
             credentials: creds,
-            environment: ["AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID": "env-agy-id"],
+            environment: ["AIQUOTY_GEMINI_OAUTH_CLIENT_ID": "env-gem-id"],
             fileSystem: fs
         )
-        XCTAssertEqual(overridden.clientID, "keychain-agy-id")
-        XCTAssertEqual(overridden.clientSecret, "file-agy-secret")
+        XCTAssertEqual(overridden.clientID, "keychain-gem-id")
+        XCTAssertEqual(overridden.clientSecret, "file-gem-secret")
 
         // Falls back to build-time injected Info.plist keys when Keychain/env/file are absent.
-        let fromPlist = GoogleOAuthAppConfig.antigravity.resolved(
+        let fromPlist = GoogleOAuthAppConfig.gemini.resolved(
             credentials: InMemoryCredentialStore(),
             environment: [:],
             fileSystem: MemoryFileSystem(),
             bundleInfo: [
-                "AIQuotyAntigravityOAuthClientID": "plist-agy-id.apps.googleusercontent.com",
-                "AIQuotyAntigravityOAuthClientSecret": "plist-agy-secret",
+                "AIQuotyGeminiOAuthClientID": "plist-gem-id.apps.googleusercontent.com",
+                "AIQuotyGeminiOAuthClientSecret": "plist-gem-secret",
             ]
         )
-        XCTAssertEqual(fromPlist.clientID, "plist-agy-id.apps.googleusercontent.com")
-        XCTAssertEqual(fromPlist.clientSecret, "plist-agy-secret")
+        XCTAssertEqual(fromPlist.clientID, "plist-gem-id.apps.googleusercontent.com")
+        XCTAssertEqual(fromPlist.clientSecret, "plist-gem-secret")
     }
 }

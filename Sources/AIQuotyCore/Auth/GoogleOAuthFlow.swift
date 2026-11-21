@@ -113,8 +113,8 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
     }
 
     /// Parses `~/.aiquoty/oauth.json` (or `config.json`) supporting:
-    /// `{ "antigravity": { "client_id": "...", "client_secret": "..." } }`
-    /// or `{ "oauth": { "antigravity": { ... } } }` (both snake_case and camelCase).
+    /// `{ "gemini": { "client_id": "...", "client_secret": "..." } }`
+    /// or `{ "oauth": { "gemini": { ... } } }` (both snake_case and camelCase).
     private static func loadFromConfigFiles(
         providerID: String,
         fileSystem: FileSystemReading,
@@ -166,28 +166,6 @@ public struct GoogleOAuthAppConfig: Sendable, Equatable {
         infoPlistClientIDKey: "AIQuotyGeminiOAuthClientID",
         infoPlistClientSecretKey: "AIQuotyGeminiOAuthClientSecret",
         riskNotice: nil
-    )
-
-    public static let antigravity = GoogleOAuthAppConfig(
-        id: "antigravity",
-        displayName: "Antigravity",
-        scopes: [
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-            "https://www.googleapis.com/auth/cclog",
-            "https://www.googleapis.com/auth/experimentsandconfigs",
-        ],
-        callbackPath: "/oauth-callback",
-        loopbackHost: "localhost",
-        keychainAccount: CredentialAccount.antigravityOAuthBundle,
-        clientIDAccount: CredentialAccount.antigravityOAuthClientID,
-        clientSecretAccount: CredentialAccount.antigravityOAuthClientSecret,
-        envClientIDKey: "AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_ID",
-        envClientSecretKey: "AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
-        infoPlistClientIDKey: "AIQuotyAntigravityOAuthClientID",
-        infoPlistClientSecretKey: "AIQuotyAntigravityOAuthClientSecret",
-        riskNotice: "提示：请先在下方填写 OAuth Client ID / Secret（仅存本机钥匙串，不写入源码）后再使用一键浏览器登录。"
     )
 }
 
@@ -391,12 +369,13 @@ public enum GoogleOAuthFlow {
         http: HTTPClient,
         app: GoogleOAuthAppConfig,
         credentials: CredentialStore,
-        now: Date = Date()
+        now: Date = Date(),
+        forceRefresh: Bool = false
     ) async throws -> (accessToken: String, email: String?)? {
         guard let bundle = GoogleOAuthBundle.load(from: credentials, account: app.keychainAccount) else {
             return nil
         }
-        if bundle.isValid(at: now) {
+        if !forceRefresh && bundle.isValid(at: now) {
             return (bundle.accessToken, bundle.email)
         }
         let resolvedApp = app.resolved(credentials: credentials)

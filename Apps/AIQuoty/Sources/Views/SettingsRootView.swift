@@ -167,6 +167,7 @@ private struct ProviderConnectionSpec: Identifiable {
     var oauth: OAuth? = nil
     var oauthNote: String? = nil
     var cliLogin: Bool = false
+    var desktopAppLogin: Bool = false
     var secrets: [SecretFieldSpec] = []
     var detectPaths: [String] = []
 
@@ -219,31 +220,9 @@ private enum ProviderCatalog {
         ),
         ProviderConnectionSpec(
             id: "antigravity", title: "Antigravity", group: .agents,
-            summary: "默认自动复用本机 Antigravity 桌面端登录态，无需填写 Key。",
-            oauth: .google(.antigravity, bundleAccount: CredentialAccount.antigravityOAuthBundle),
-            oauthNote: "已登录本机 Antigravity 桌面端时会自动读取，无需使用下方 OAuth。如需独立授权，请先填写 OAuth Client ID / Secret。",
-            secrets: [
-                SecretFieldSpec(
-                    label: "OAuth Client ID（可选）",
-                    placeholder: "Google OAuth Client ID",
-                    hint: "仅在使用应用内一键登录时需要；已登录 Antigravity 桌面端时无需填写。",
-                    account: CredentialAccount.antigravityOAuthClientID
-                ),
-                SecretFieldSpec(
-                    label: "OAuth Client Secret（可选）",
-                    placeholder: "Google OAuth Client Secret",
-                    hint: "配合 Client ID 使用。也可通过环境变量 AIQUOTY_ANTIGRAVITY_OAUTH_CLIENT_SECRET 提供。",
-                    account: CredentialAccount.antigravityOAuthClientSecret
-                ),
-                SecretFieldSpec(
-                    label: "Access Token（手动覆盖）",
-                    placeholder: "Google Cloud Code OAuth Access Token",
-                    hint: "留空时自动读取本机 Antigravity state.vscdb。",
-                    account: CredentialAccount.antigravityOAuthToken
-                ),
-            ],
+            summary: "自动复用本机 Antigravity 桌面端登录态（state.vscdb）。",
+            desktopAppLogin: true,
             detectPaths: [
-                "~/.aiquoty/oauth.json",
                 "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
                 "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
             ]
@@ -512,7 +491,7 @@ private struct ConnectionsSettingsTab: View {
             }
         }
         var emails: [String: String] = [:]
-        for bundleAccount in [CredentialAccount.geminiOAuthBundle, CredentialAccount.antigravityOAuthBundle] {
+        for bundleAccount in [CredentialAccount.geminiOAuthBundle] {
             if let bundle = GoogleOAuthBundle.load(from: store, account: bundleAccount) {
                 emails[bundleAccount] = bundle.email ?? "已授权"
             }
@@ -627,6 +606,18 @@ private struct ProviderDetailView: View {
         let isError: Bool
     }
 
+    private var latestProviderError: String? {
+        if let snapErr = model.state.snapshots
+            .first(where: { $0.account.providerID == spec.id && ($0.lastError?.isEmpty == false) })?
+            .lastError {
+            return snapErr
+        }
+        if let err = model.state.providerErrors[spec.id], !err.isEmpty {
+            return err
+        }
+        return nil
+    }
+
     var body: some View {
         Form {
             Section {
@@ -640,6 +631,15 @@ private struct ProviderDetailView: View {
                     }
                     Spacer()
                     StatusBadge(text: status.label, tint: status.tint)
+                }
+            }
+
+            if let errMsg = latestProviderError {
+                Section {
+                    Label(errMsg, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(Palette.warn)
+                        .textSelection(.enabled)
                 }
             }
 
@@ -669,6 +669,28 @@ private struct ProviderDetailView: View {
                         Text("官方 CLI 登录")
                         Text("登录完成后自动读取。未安装 CLI 时会复制安装与登录命令。")
                     }
+                }
+            }
+
+            if spec.desktopAppLogin {
+                Section {
+                    LabeledContent {
+                        HStack(spacing: 6) {
+                            Button("刷新读取") {
+                                Task { await model.refresh(force: true) }
+                            }
+                            .disabled(model.isRefreshing)
+                            Button("打开桌面端") {
+                                model.startOneClickSignIn(providerID: spec.id)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    } label: {
+                        Text("复用本机桌面端登录态")
+                        Text("自动只读解析 state.vscdb（优先读取最新同步令牌），无需通过 AIQuoty 授权。")
+                    }
+                } header: {
+                    Text("自动同步")
                 }
             }
 

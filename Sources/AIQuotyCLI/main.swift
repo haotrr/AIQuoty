@@ -60,7 +60,7 @@ struct AIQuotyCLI {
                 ClaudeOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, externalKeychain: NullExternalKeychainReader(), demoFixture: DemoFixtures.claudeUsageJSON),
                 CodexOAuthProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.codexUsageJSON),
                 CursorSessionProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, cursorStateReader: NullCursorStateReader(), demoFixture: DemoFixtures.cursorUsageJSON),
-                AntigravityProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.antigravityQuotaJSON),
+                AntigravityProvider(http: FixtureHTTPClient(), stateReader: NullAntigravityStateReader(), demoFixture: DemoFixtures.antigravityQuotaJSON),
                 GeminiCLIProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.geminiQuotaJSON),
                 OpenCodeProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.openCodeUsageJSON),
                 DeepSeekProvider(credentials: credentials, http: FixtureHTTPClient(), fileSystem: memFS, demoFixture: DemoFixtures.deepSeekBalanceJSON),
