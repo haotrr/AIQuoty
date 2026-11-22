@@ -35,6 +35,10 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app || true
       - name: Test core
         run: swift test
+      - name: Validate Xcode project membership
+        run: |
+          chmod +x Scripts/validate_xcodeproj.py
+          python3 Scripts/validate_xcodeproj.py
       - name: Package app
         run: |
           chmod +x Scripts/build_macos.sh
@@ -42,9 +46,11 @@ jobs:
       - name: Verify Xcode project tests
         run: xcodebuild -project AIQuoty.xcodeproj -scheme AIQuoty -configuration Debug test -quiet
       - name: Upload artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: AIQuoty-macos
           path: |
             dist/AIQuoty.app
             dist/AIQuoty-macos14.zip
+          if-no-files-found: error
