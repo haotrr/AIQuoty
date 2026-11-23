@@ -28,11 +28,24 @@ struct PopoverRootView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var contentHeight: CGFloat = 0
+    @State private var unfilteredHeight: CGFloat = 0
     @State private var filter: SnapshotFilter = .all
 
     /// Search is only useful once the list gets long; below this it's noise.
     private static let searchThreshold = 5
     private static let maxScrollHeight: CGFloat = 600
+
+    private var effectiveScrollHeight: CGFloat {
+        let target: CGFloat
+        if filter == .all && model.searchText.isEmpty {
+            target = contentHeight
+        } else {
+            // Keep popover height stable while filtering/searching so MenuBarExtra(.window)
+            // never shrinks and detaches from the menu bar.
+            target = max(unfilteredHeight, contentHeight)
+        }
+        return min(max(target, 120), Self.maxScrollHeight)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,6 +56,7 @@ struct PopoverRootView: View {
             Divider()
             ScrollView {
                 content
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 7)
                     .background(
@@ -51,14 +65,24 @@ struct PopoverRootView: View {
                         }
                     )
             }
-            .frame(height: min(max(contentHeight, 120), Self.maxScrollHeight))
-            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+            .frame(height: effectiveScrollHeight)
+            .onPreferenceChange(ContentHeightKey.self) { height in
+                contentHeight = height
+                if filter == .all && model.searchText.isEmpty {
+                    unfilteredHeight = height
+                }
+            }
             Divider()
             footer
         }
         .frame(width: 396)
         .preferredColorScheme(model.preferredColorScheme)
         .background(hiddenShortcuts)
+        .onChange(of: availableFilters) { _, newFilters in
+            if !newFilters.contains(filter) {
+                filter = .all
+            }
+        }
     }
 
     // MARK: Content
@@ -94,7 +118,8 @@ struct PopoverRootView: View {
                             reauthTitle: model.signInActionTitle(for: snap.account.providerID),
                             onReauth: { model.startOneClickSignIn(providerID: snap.account.providerID) },
                             onRetry: { Task { await model.refresh(force: true) } },
-                            onOpenSettings: openSettingsAndActivate
+                            onOpenSettings: openSettingsAndActivate,
+                            activeFilter: filter
                         )
                     }
                 }
@@ -189,13 +214,16 @@ struct PopoverRootView: View {
 
     private var header: some View {
         let total = model.homeSnapshots.count
-        let hotCount = model.homeSnapshots.filter { snap in
+        let visible = visibleSnapshots
+        let isFiltered = filter != .all || !model.searchText.isEmpty
+        let showsQuotaStats = filter == .all || filter == .quota
+        let hotCount = showsQuotaStats ? visible.filter { snap in
             snap.windows.contains { ($0.usedFraction ?? 0) >= 0.80 }
-        }.count
-        let peakFraction = model.homeSnapshots
+        }.count : 0
+        let peakFraction = showsQuotaStats ? visible
             .flatMap(\.windows)
             .compactMap(\.usedFraction)
-            .max()
+            .max() : nil
 
         return HStack(alignment: .center, spacing: 6) {
             Text("AIQuoty")
@@ -204,7 +232,7 @@ struct PopoverRootView: View {
                 StatusBadge(text: "演示", tint: Palette.spend)
             } else if total > 0 {
                 HStack(spacing: 4) {
-                    Text("\(total) 项")
+                    Text(isFiltered ? "\(visible.count)/\(total) 项" : "\(total) 项")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                     if hotCount > 0 {
@@ -601,11 +629,17 @@ struct AccountCard: View {
     var onOpenSettings: (() -> Void)? = nil
     /// Dashboard shows every window; the popover shows up to 2 inline (e.g. 5h + 7d) before collapsing.
     var alwaysExpanded: Bool = false
+    /// When filtered to 配额 / API / 日志, only show metrics belonging to that category.
+    var activeFilter: SnapshotFilter = .all
 
     private static let collapsedWindowLimit = 2
 
     @State private var isHovering = false
     @State private var isExpanded = false
+
+    private var showWindows: Bool { activeFilter == .all || activeFilter == .quota }
+    private var showSpendMetrics: Bool { activeFilter == .all || activeFilter == .spend }
+    private var showLocalMetrics: Bool { activeFilter == .all || activeFilter == .local }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -614,22 +648,24 @@ struct AccountCard: View {
             if !hasMetrics {
                 problemView
             } else {
-                if !displayedWindows.isEmpty {
+                if showWindows && !displayedWindows.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(displayedWindows) { window in
                             QuotaBar(window: window)
                         }
                     }
                 }
-                if hiddenWindowCount > 0 || (isExpanded && snapshot.windows.count > Self.collapsedWindowLimit && !alwaysExpanded) {
+                if showWindows && (hiddenWindowCount > 0 || (isExpanded && snapshot.windows.count > Self.collapsedWindowLimit && !alwaysExpanded)) {
                     expandToggle
                 }
-                if !snapshot.spendMetrics.isEmpty || !snapshot.localTokenMetrics.isEmpty {
+                let visibleSpend = showSpendMetrics ? snapshot.spendMetrics : []
+                let visibleLocal = showLocalMetrics ? snapshot.localTokenMetrics : []
+                if !visibleSpend.isEmpty || !visibleLocal.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(snapshot.spendMetrics.enumerated()), id: \.offset) { _, metric in
+                        ForEach(Array(visibleSpend.enumerated()), id: \.offset) { _, metric in
                             MetricRow(metric: metric)
                         }
-                        ForEach(Array(snapshot.localTokenMetrics.enumerated()), id: \.offset) { _, metric in
+                        ForEach(Array(visibleLocal.enumerated()), id: \.offset) { _, metric in
                             MetricRow(metric: metric)
                         }
                     }
@@ -660,11 +696,11 @@ struct AccountCard: View {
         case .authRequired, .rateLimited: return Palette.warn
         case .disconnected, .unsupported, .connecting: return .secondary
         case .connected:
-            if let maxUsed = snapshot.windows.compactMap(\.usedFraction).max() {
+            if showWindows, let maxUsed = snapshot.windows.compactMap(\.usedFraction).max() {
                 return Palette.usageColor(usedFraction: maxUsed)
             }
-            if !snapshot.spendMetrics.isEmpty { return Palette.spend }
-            if !snapshot.localTokenMetrics.isEmpty { return Palette.local }
+            if showSpendMetrics && !snapshot.spendMetrics.isEmpty { return Palette.spend }
+            if showLocalMetrics && !snapshot.localTokenMetrics.isEmpty { return Palette.local }
             return Palette.good
         }
     }

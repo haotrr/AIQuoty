@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 @testable import AIQuotyCore
 
 private struct StubCursorStateReader: CursorStateReading {
@@ -515,5 +518,78 @@ final class MainstreamProvidersTests: XCTestCase {
         )
         XCTAssertEqual(fromPlist.clientID, "plist-gem-id.apps.googleusercontent.com")
         XCTAssertEqual(fromPlist.clientSecret, "plist-gem-secret")
+    }
+
+    func testFactoryEncryptedLoginKeychainAndRealUsageParsing() async throws {
+        // 1. Real Factory chat-usage payload: overage > 1.0 usedRatio, zero-allowance premium bucket, parent endDate.
+        let liveUsageJSON = """
+        {
+          "usage": {
+            "startDate": 1792164451569,
+            "endDate": 1794756451569,
+            "standard": {
+              "userTokens": 125764619,
+              "orgTotalTokensUsed": 125764619,
+              "orgOverageUsed": 105764619,
+              "basicAllowance": 20000000,
+              "totalAllowance": 20000000,
+              "orgOverageLimit": 0,
+              "usedRatio": 6.28823095
+            },
+            "premium": {
+              "userTokens": 0,
+              "orgTotalTokensUsed": 0,
+              "orgOverageUsed": 0,
+              "basicAllowance": 0,
+              "totalAllowance": 0,
+              "orgOverageLimit": 0,
+              "usedRatio": 0
+            }
+          }
+        }
+        """.data(using: .utf8)!
+
+        let parsed = try FactoryUsageParser.parse(json: liveUsageJSON, accountID: "factory.live")
+        XCTAssertEqual(parsed.windows.count, 1) // Zero-allowance premium bucket is omitted.
+        XCTAssertEqual(parsed.windows[0].title, "Standard 配额")
+        XCTAssertEqual(parsed.windows[0].usedFraction ?? -1, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(parsed.windows[0].remainingFraction ?? -1, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(parsed.windows[0].usedDisplay.display, "629%")
+        XCTAssertEqual(parsed.windows[0].remainingDisplay.display, "0%")
+        XCTAssertTrue(parsed.windows[0].resetKnown)
+
+        // 2. Encrypted ~/.factory/auth.v2.loginkeychain + Keychain "Factory CLI" key.
+        #if canImport(CryptoKit)
+        let keyBytes = Data((0..<32).map { UInt8($0) })
+        let key = SymmetricKey(data: keyBytes)
+        let ivBytes = Data((0..<16).map { UInt8(100 + $0) })
+        let nonce = try AES.GCM.Nonce(data: ivBytes)
+        let authJSON = #"{"access_token":"eyJ_factory_jwt_test","refresh_token":"ref_123"}"#.data(using: .utf8)!
+        let sealed = try AES.GCM.seal(authJSON, using: key, nonce: nonce)
+        let payload = "\(ivBytes.base64EncodedString()):\(sealed.tag.base64EncodedString()):\(sealed.ciphertext.base64EncodedString())"
+
+        let fs = MemoryFileSystem(files: [
+            "~/.factory/auth.v2.loginkeychain": Data(payload.utf8),
+        ])
+        let kc = StubExternalKeychain(items: [
+            "Factory CLI::auth-encryption-key-security-cli": Data(keyBytes.base64EncodedString().utf8),
+        ])
+        let http = FixtureHTTPClient(responses: [
+            "api.factory.ai/api/organization/members/chat-usage": HTTPResponse(statusCode: 200, headers: [:], body: liveUsageJSON),
+        ])
+        let provider = FactoryDroidProvider(
+            credentials: InMemoryCredentialStore(),
+            http: http,
+            fileSystem: fs,
+            externalKeychain: kc
+        )
+        let accounts = await provider.configuredAccounts()
+        XCTAssertEqual(accounts.count, 1)
+        let snaps = try await provider.fetch(request: ProviderFetchRequest())
+        XCTAssertEqual(snaps.count, 1)
+        XCTAssertEqual(snaps[0].connection, .connected)
+        XCTAssertEqual(snaps[0].windows.count, 1)
+        XCTAssertEqual(snaps[0].windows[0].usedDisplay.display, "629%")
+        #endif
     }
 }

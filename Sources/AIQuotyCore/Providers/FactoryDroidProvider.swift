@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 public struct FactoryDroidProvider: QuotaProvider {
     public static let descriptor = ProviderDescriptor(
@@ -7,7 +10,7 @@ public struct FactoryDroidProvider: QuotaProvider {
         implementationStatus: .implemented,
         authMethods: [.apiKeyInKeychain, .localCLICredentials],
         supportedMetricKinds: [.subscriptionQuota],
-        notes: "使用钥匙串中的 Factory API Key (fk-...) 或 ~/.factory/auth.json，调用 api.factory.ai/api/organization/members/chat-usage 查询订阅配额。"
+        notes: "使用钥匙串中的 Factory API Key (fk-...)、Droid CLI 加密登录态（~/.factory/auth.v2.loginkeychain + 钥匙串「Factory CLI」）或 ~/.factory/auth.json，调用 api.factory.ai/api/organization/members/chat-usage 查询订阅配额。"
     )
 
     public var descriptor: ProviderDescriptor { Self.descriptor }
@@ -15,23 +18,29 @@ public struct FactoryDroidProvider: QuotaProvider {
     private let credentials: CredentialStore
     private let http: HTTPClient
     private let fileSystem: FileSystemReading
+    private let externalKeychain: ExternalKeychainReading
     private let clock: @Sendable () -> Date
     private let authPath: String
+    private let encryptedAuthPath: String
     private let demoFixture: Data?
 
     public init(
         credentials: CredentialStore,
         http: HTTPClient,
         fileSystem: FileSystemReading,
+        externalKeychain: ExternalKeychainReading = DefaultExternalKeychain.make(),
         clock: @escaping @Sendable () -> Date = { Date() },
         authPath: String = "~/.factory/auth.json",
+        encryptedAuthPath: String = "~/.factory/auth.v2.loginkeychain",
         demoFixture: Data? = nil
     ) {
         self.credentials = credentials
         self.http = http
         self.fileSystem = fileSystem
+        self.externalKeychain = externalKeychain
         self.clock = clock
         self.authPath = authPath
+        self.encryptedAuthPath = encryptedAuthPath
         self.demoFixture = demoFixture
     }
 
@@ -48,7 +57,7 @@ public struct FactoryDroidProvider: QuotaProvider {
             return try [FactoryUsageParser.parse(json: demoFixture, accountID: "factory.demo", now: now)]
         }
         guard let token = resolveToken(), !token.isEmpty else {
-            throw ProviderError.notConfigured("未配置 Factory API Key 或 ~/.factory/auth.json。")
+            throw ProviderError.notConfigured("未配置 Factory API Key，且未检测到有效的 Droid CLI 登录态。")
         }
 
         let url = URL(string: "https://api.factory.ai/api/organization/members/chat-usage")!
@@ -74,12 +83,72 @@ public struct FactoryDroidProvider: QuotaProvider {
         }
         if fileSystem.fileExists(at: authPath),
            let data = try? fileSystem.readData(at: authPath),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let tok = (obj["access_token"] as? String) ?? (obj["accessToken"] as? String) ?? (obj["apiKey"] as? String), !tok.isEmpty {
-                return tok
-            }
+           let tok = extractToken(from: data) {
+            return tok
+        }
+        if fileSystem.fileExists(at: encryptedAuthPath),
+           let encryptedData = try? fileSystem.readData(at: encryptedAuthPath),
+           let payload = String(data: encryptedData, encoding: .utf8),
+           let keyData = externalKeychain.readGenericPassword(
+               service: "Factory CLI",
+               account: "auth-encryption-key-security-cli"
+           ),
+           let decrypted = FactoryAuthDecryptor.decrypt(payload: payload, keyData: keyData),
+           let tok = extractToken(from: decrypted) {
+            return tok
         }
         return nil
+    }
+
+    private func extractToken(from data: Data) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let tok = (obj["access_token"] as? String) ?? (obj["accessToken"] as? String) ?? (obj["apiKey"] as? String),
+           !tok.isEmpty {
+            return tok
+        }
+        return nil
+    }
+}
+
+public enum FactoryAuthDecryptor {
+    /// Decrypts Factory CLI v2 auth file (`<base64_iv>:<base64_tag>:<base64_ciphertext>`)
+    /// using the AES-256 key stored in macOS Keychain (either raw 32 bytes or base64-encoded 32 bytes).
+    public static func decrypt(payload: String, keyData: Data) -> Data? {
+        #if canImport(CryptoKit)
+        let rawKey: Data
+        if keyData.count == 32 {
+            rawKey = keyData
+        } else if let keyString = String(data: keyData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            let decoded = Data(base64Encoded: keyString),
+            decoded.count == 32 {
+            rawKey = decoded
+        } else {
+            return nil
+        }
+
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3,
+              let iv = Data(base64Encoded: parts[0]),
+              let tag = Data(base64Encoded: parts[1]),
+              let ciphertext = Data(base64Encoded: parts[2]) else {
+            return nil
+        }
+
+        do {
+            let key = SymmetricKey(data: rawKey)
+            let nonce = try AES.GCM.Nonce(data: iv)
+            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag)
+            return try AES.GCM.open(sealedBox, using: key)
+        } catch {
+            return nil
+        }
+        #else
+        return nil
+        #endif
     }
 }
 
@@ -98,19 +167,20 @@ public enum FactoryUsageParser {
         let usage = (root["usage"] as? [String: Any]) ?? root
         let plan = (root["plan"] as? String) ?? (usage["plan"] as? String)
         let email = root["email"] as? String
+        let usageReset = parseDate(usage["endDate"] ?? usage["resetAt"] ?? usage["billingPeriodEnd"])
 
         var windows: [QuotaWindow] = []
         if let std = usage["standard"] as? [String: Any] {
-            if let w = makeWindow(id: "\(accountID).standard", title: "Standard 配额", dict: std, now: now) {
+            if let w = makeWindow(id: "\(accountID).standard", title: "Standard 配额", dict: std, fallbackReset: usageReset, now: now) {
                 windows.append(w)
             }
         }
         if let prem = usage["premium"] as? [String: Any] {
-            if let w = makeWindow(id: "\(accountID).premium", title: "Premium 配额", dict: prem, now: now) {
+            if let w = makeWindow(id: "\(accountID).premium", title: "Premium 配额", dict: prem, fallbackReset: usageReset, now: now) {
                 windows.append(w)
             }
         }
-        if windows.isEmpty, let w = makeWindow(id: "\(accountID).usage", title: "Droid 配额", dict: usage, now: now) {
+        if windows.isEmpty, let w = makeWindow(id: "\(accountID).usage", title: "Droid 配额", dict: usage, fallbackReset: usageReset, now: now) {
             windows.append(w)
         }
 
@@ -129,17 +199,34 @@ public enum FactoryUsageParser {
         )
     }
 
-    private static func makeWindow(id: String, title: String, dict: [String: Any], now: Date) -> QuotaWindow? {
-        let usedFraction: Double?
-        if let ratio = number(dict["usedRatio"] ?? dict["used_ratio"]) {
-            usedFraction = min(max(ratio > 1 ? ratio / 100.0 : ratio, 0), 1)
-        } else if let used = number(dict["used"] ?? dict["userTokens"]),
-                  let allowance = number(dict["allowance"] ?? dict["totalAllowance"]), allowance > 0 {
-            usedFraction = min(max(used / allowance, 0), 1)
-        } else {
-            usedFraction = nil
+    private static func makeWindow(
+        id: String,
+        title: String,
+        dict: [String: Any],
+        fallbackReset: Date?,
+        now: Date
+    ) -> QuotaWindow? {
+        let used = number(dict["used"] ?? dict["userTokens"] ?? dict["orgTotalTokensUsed"])
+        let allowance = number(dict["allowance"] ?? dict["totalAllowance"] ?? dict["basicAllowance"])
+        let ratio = number(dict["usedRatio"] ?? dict["used_ratio"])
+
+        // Skip unallocated / zero-allowance empty buckets (e.g. premium with totalAllowance == 0 and 0 usage).
+        if let allowance, allowance <= 0, (used ?? 0) <= 0, (ratio ?? 0) <= 0 {
+            return nil
         }
-        let reset = parseDate(dict["endDate"] ?? dict["resetAt"] ?? dict["billingPeriodEnd"])
+
+        let rawRatio: Double?
+        if let used, let allowance, allowance > 0 {
+            rawRatio = max(used / allowance, 0)
+        } else if let ratio {
+            // Factory's usedRatio is always a decimal ratio (1.0 = 100%, >1.0 = overage).
+            rawRatio = max(ratio, 0)
+        } else {
+            rawRatio = nil
+        }
+
+        let usedFraction = rawRatio.map { min(max($0, 0), 1) }
+        let reset = parseDate(dict["endDate"] ?? dict["resetAt"] ?? dict["billingPeriodEnd"]) ?? fallbackReset
         guard usedFraction != nil || reset != nil else { return nil }
         let rem = ResetMath.remainingFromUsed(usedFraction)
         return QuotaWindow(
@@ -147,7 +234,7 @@ public enum FactoryUsageParser {
             title: title,
             usedFraction: usedFraction,
             remainingFraction: rem,
-            usedDisplay: usedFraction.map {
+            usedDisplay: rawRatio.map {
                 MetricValue(
                     kind: .subscriptionQuota, precision: .reported, unit: .percentUsed,
                     value: $0 * 100, display: String(format: "%.0f%%", $0 * 100),

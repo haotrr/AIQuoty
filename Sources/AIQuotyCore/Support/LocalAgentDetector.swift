@@ -161,7 +161,7 @@ public enum LocalAgentDetector {
                 "~/.factory",
                 "~/.config/factory",
             ],
-            setupHint: "在设置中填入 Factory API Key (fk-...) 或使用 ~/.factory/auth.json。"
+            setupHint: "运行 droid 登录（自动读取 ~/.factory/auth.v2.loginkeychain 与钥匙串），或在设置中填入 Factory API Key (fk-...)。"
         ),
         Rule(
             providerID: "grok",

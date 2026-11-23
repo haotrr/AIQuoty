@@ -331,11 +331,11 @@ private enum ProviderCatalog {
                 SecretFieldSpec(
                     label: "API Key",
                     placeholder: "fk-...",
-                    hint: "留空时自动读取 ~/.factory/auth.json。",
+                    hint: "留空时自动读取 Droid CLI 登录态（~/.factory/auth.v2.loginkeychain + 钥匙串）或 ~/.factory/auth.json。",
                     account: CredentialAccount.factoryAPIKey
                 ),
             ],
-            detectPaths: ["~/.factory/auth.json"]
+            detectPaths: ["~/.factory/auth.v2.loginkeychain", "钥匙串「Factory CLI」", "~/.factory/auth.json"]
         ),
         ProviderConnectionSpec(
             id: "windsurf", title: "Windsurf", group: .agents,
@@ -1006,7 +1006,8 @@ struct DashboardView: View {
                                     onReauth: { model.startOneClickSignIn(providerID: snap.account.providerID) },
                                     onRetry: { Task { await model.refresh(force: true) } },
                                     onOpenSettings: openSettingsAndActivate,
-                                    alwaysExpanded: true
+                                    alwaysExpanded: true,
+                                    activeFilter: filter
                                 )
                                 .frame(maxHeight: .infinity, alignment: .top)
                             }

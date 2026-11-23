@@ -806,14 +806,14 @@
       const payload = await resp.json();
       const snapshots = Array.isArray(payload.snapshots) ? payload.snapshots : [];
       state.accounts = snapshots.map(mapCoreSnapshotToCard);
-      state.dataSourceLabel = state.mode === "demo" ? "AIQuotyCore 全量数据" : "本机实时采集";
+      state.dataSourceLabel = state.mode === "demo" ? "AIQuotyCore 演示数据" : "本机实时采集";
       if (state.accounts.length === 0 && state.mode === "live") {
-        state.toastMessage = "当前本机尚未探测到已登录的 AI 订阅凭证，可先在 AIQuoty 菜单栏登录后点击「刷新」，或切换到「全量数据」预览。";
+        state.toastMessage = "当前本机尚未探测到已登录的 AI 订阅凭证，可先在 AIQuoty 菜单栏登录后点击「刷新」，或切换到「演示数据」预览。";
       }
     } catch (_err) {
       if (state.mode === "demo") {
         state.accounts = createFallbackFullDemoAccounts();
-        state.dataSourceLabel = "内置全量数据";
+        state.dataSourceLabel = "内置演示数据";
       } else {
         state.accounts = [];
         state.dataSourceLabel = "未连接本机服务";
